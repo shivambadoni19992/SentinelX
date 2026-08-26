@@ -1,0 +1,53 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  - job_name: api-gateway
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ["api-gateway:8080"]
+
+  - job_name: auth-service
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ["auth-service:8081"]
+
+  - job_name: payment-service
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ["payment-service:8082"]
+
+  - job_name: retail-service
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ["retail-service:8083"]
+
+  - job_name: security-event-service
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ["security-event-service:8084"]
+
+  - job_name: detection-engine
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ["detection-engine:8085"]
+
+  - job_name: risk-engine
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ["risk-engine:8086"]
+
+  - job_name: alert-service
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ["alert-service:8087"]
+
+  - job_name: simulation-service
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ["simulation-service:8088"]

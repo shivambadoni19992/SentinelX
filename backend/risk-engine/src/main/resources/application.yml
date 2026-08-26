@@ -1,0 +1,27 @@
+server:
+  port: 8086
+
+spring:
+  application:
+    name: sentinelx-risk-engine
+  profiles:
+    active: ${SPRING_PROFILES_ACTIVE:default}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: always
+
+info:
+  service: sentinelx-risk-engine
+  env: ${SENTINELX_ENV:local}
+
+logging:
+  level:
+    root: INFO

@@ -1,0 +1,22 @@
+:root {
+  color-scheme: light dark;
+  --bg: #0b1220;
+  --panel: #101a2e;
+  --panel-2: #15233c;
+  --line: #1f2f4d;
+  --text: #e2e8f0;
+  --muted: #7d8db1;
+  --accent: #0ea5e9;
+  --good: #22c55e;
+  --bad: #ef4444;
+}
+
+* { box-sizing: border-box; }
+
+html, body, #root {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
