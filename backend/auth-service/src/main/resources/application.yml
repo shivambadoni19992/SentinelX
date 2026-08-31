@@ -38,6 +38,15 @@ info:
   service: sentinelx-auth-service
   env: ${SENTINELX_ENV:local}
 
+# JWT signing + validation.
+# SENTINELX_JWT_SECRET must be at least 32 bytes for HS256. The value below is a
+# development-only default; always override it in real deployments.
+sentinelx:
+  jwt:
+    secret: ${SENTINELX_JWT_SECRET:sentinelx-dev-only-secret-change-me-0123456789abcdef}
+    ttl-seconds: ${SENTINELX_JWT_TTL_SECONDS:3600}
+    issuer: ${SENTINELX_JWT_ISSUER:sentinelx-auth-service}
+
 logging:
   level:
     root: INFO

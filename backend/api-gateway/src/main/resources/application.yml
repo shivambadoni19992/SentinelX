@@ -6,25 +6,47 @@ spring:
     name: sentinelx-api-gateway
   profiles:
     active: ${SPRING_PROFILES_ACTIVE:default}
+  # Redis backing the gateway RequestRateLimiter (same cluster as the services).
+  data:
+    redis:
+      host: ${SPRING_DATA_REDIS_HOST:localhost}
+      port: ${SPRING_DATA_REDIS_PORT:6379}
+      timeout: 2s
 
 management:
   endpoints:
     web:
       exposure:
-        include: health,info,metrics,prometheus
+        include: health,info,metrics,prometheus,gateway
   endpoint:
     health:
       probes:
         enabled: true
       show-details: always
+    gateway:
+      enabled: true
 
 info:
   service: sentinelx-api-gateway
   env: ${SENTINELX_ENV:local}
 
+# JWT signing/validation. Must match the auth-service secret/issuer so tokens
+# issued at /api/auth/login can be validated at the edge.
+sentinelx:
+  jwt:
+    secret: ${SENTINELX_JWT_SECRET:sentinelx-dev-only-secret-change-me-0123456789abcdef}
+    issuer: ${SENTINELX_JWT_ISSUER:sentinelx-auth-service}
+
+# Per-route rate limiting (token bucket in Redis). Values are overridable via
+# env so tests/e2e can tune them without touching route definitions.
+rate-limit:
+  replenish: ${RATE_LIMIT_REPLENISH:50}
+  burst: ${RATE_LIMIT_BURST:80}
+
 logging:
   level:
     root: INFO
+
 ---
 spring:
   config:
@@ -36,15 +58,39 @@ spring:
         - id: auth
           uri: http://auth-service:8081
           predicates: [ Path=/api/auth/** ]
-        - id: payment
+          filters:
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: ${rate-limit.replenish}
+                redis-rate-limiter.burstCapacity: ${rate-limit.burst}
+                redis-rate-limiter.requestedTokens: 1
+        - id: payments
           uri: http://payment-service:8082
           predicates: [ Path=/api/payments/** ]
-        - id: retail
+          filters:
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: ${rate-limit.replenish}
+                redis-rate-limiter.burstCapacity: ${rate-limit.burst}
+                redis-rate-limiter.requestedTokens: 1
+        - id: orders
           uri: http://retail-service:8083
-          predicates: [ Path=/api/retail/** ]
-        - id: events
+          predicates: [ Path=/api/orders/** ]
+          filters:
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: ${rate-limit.replenish}
+                redis-rate-limiter.burstCapacity: ${rate-limit.burst}
+                redis-rate-limiter.requestedTokens: 1
+        - id: security
           uri: http://security-event-service:8084
-          predicates: [ Path=/api/events/** ]
+          predicates: [ Path=/api/security/** ]
+          filters:
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: ${rate-limit.replenish}
+                redis-rate-limiter.burstCapacity: ${rate-limit.burst}
+                redis-rate-limiter.requestedTokens: 1
         - id: detection
           uri: http://detection-engine:8085
           predicates: [ Path=/api/detections/** ]
@@ -54,8 +100,18 @@ spring:
         - id: alerts
           uri: http://alert-service:8087
           predicates: [ Path=/api/alerts/** ]
-        - id: simulation
+          filters:
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: ${rate-limit.replenish}
+                redis-rate-limiter.burstCapacity: ${rate-limit.burst}
+                redis-rate-limiter.requestedTokens: 1
+        - id: simulations
           uri: http://simulation-service:8088
-          predicates:
-            - Path=/api/simulations/**
-            - Path=/api/ssr/**
+          predicates: [ Path=/api/simulations/** ]
+          filters:
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: ${rate-limit.replenish}
+                redis-rate-limiter.burstCapacity: ${rate-limit.burst}
+                redis-rate-limiter.requestedTokens: 1
