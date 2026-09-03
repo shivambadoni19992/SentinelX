@@ -78,7 +78,7 @@ export function RiskAnalysis() {
     return decisions.data.reduce((s, d) => s + (d.riskScore ?? 0), 0) / decisions.data.length;
   }, [decisions.data]);
 
-  const highRiskTxns = payments.data.filter((p) => (p.riskScore ?? 0) >= 0.6).length;
+  const highRiskTxns = payments.data.filter((p) => ['HELD', 'DECLINED'].includes((p.status || '').toUpperCase())).length;
 
   const columns: Column<RiskDecision>[] = [
     {

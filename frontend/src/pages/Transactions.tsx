@@ -16,8 +16,7 @@ import {
 import { BarChart } from '../components/charts/BarChart';
 import { formatCurrency, formatDateTime, relativeTime, shortId } from '../lib/format';
 
-const STATUSES = ['SETTLED', 'HELD', 'FLAGGED', 'BLOCKED', 'REFUNDED', 'PENDING'];
-const METHODS = ['CARD', 'BANK_TRANSFER', 'WALLET'];
+const STATUSES = ['PENDING', 'APPROVED', 'HELD', 'DECLINED'];
 
 export function Transactions() {
   const { data, loading, source, error, demoReason, refetch } = useCollection(
@@ -29,31 +28,24 @@ export function Transactions() {
 
   const [query, setQuery] = useState('');
   const [status, setStatus] = useState('all');
-  const [minRisk, setMinRisk] = useState('all');
 
   const filtered = useMemo(() => {
     const q = query.toLowerCase();
     return data.filter((p) => {
       const matchesQ =
         !q ||
-        (p.transactionId || '').toLowerCase().includes(q) ||
-        (p.paymentMethod || '').toLowerCase().includes(q) ||
-        (p.userId || '').toLowerCase().includes(q);
+        (p.paymentId || '').toLowerCase().includes(q) ||
+        (p.customerId || '').toLowerCase().includes(q) ||
+        (p.merchantId || '').toLowerCase().includes(q);
       const matchesStatus = status === 'all' || (p.status || '').toUpperCase() === status;
-      const risk = p.riskScore ?? 0;
-      const matchesRisk =
-        minRisk === 'all' ||
-        (minRisk === 'high' && risk >= 0.7) ||
-        (minRisk === 'medium' && risk >= 0.4 && risk < 0.7) ||
-        (minRisk === 'low' && risk < 0.4);
-      return matchesQ && matchesStatus && matchesRisk;
+      return matchesQ && matchesStatus;
     });
-  }, [data, query, status, minRisk]);
+  }, [data, query, status]);
 
   const held = data.filter((p) => (p.status || '').toUpperCase() === 'HELD').length;
-  const blocked = data.filter((p) => (p.status || '').toUpperCase() === 'BLOCKED').length;
-  const suspicious = data.filter((p) => (p.riskScore ?? 0) >= 0.6).length;
-  const flagged = data.filter((p) => (p.status || '').toUpperCase() === 'FLAGGED').length;
+  const declined = data.filter((p) => (p.status || '').toUpperCase() === 'DECLINED').length;
+  const approved = data.filter((p) => (p.status || '').toUpperCase() === 'APPROVED').length;
+  const reviewed = held + declined;
 
   const statusTotals = useMemo(() => {
     const map: Record<string, number> = {};
@@ -68,13 +60,14 @@ export function Transactions() {
   }, [data]);
 
   const columns: Column<Payment>[] = [
-    { key: 'txn', header: 'Transaction', render: (p) => <span className="mono">{shortId(p.transactionId)}</span> },
-    { key: 'user', header: 'User ID', render: (p) => <span className="muted">{shortId(p.userId, 10)}</span> },
+    { key: 'payment', header: 'Payment', render: (p) => <span className="mono">{shortId(p.paymentId)}</span> },
+    { key: 'customer', header: 'Customer', render: (p) => <span className="muted">{shortId(p.customerId, 10)}</span> },
+    { key: 'merchant', header: 'Merchant', render: (p) => <span className="muted">{shortId(p.merchantId, 10)}</span> },
     { key: 'amount', header: 'Amount', render: (p) => <strong>{formatCurrency(p.amount, p.currency)}</strong> },
-    { key: 'method', header: 'Method', render: (p) => <span>{p.paymentMethod}</span> },
-    { key: 'risk', header: 'Risk', render: (p) => <span className={riskClass(p.riskScore)}>{(p.riskScore ?? 0).toFixed(2)}</span> },
+    { key: 'device', header: 'Device', render: (p) => <span className="mono muted">{p.deviceId ?? '—'}</span> },
+    { key: 'ip', header: 'IP', render: (p) => <span className="mono muted">{p.ipAddress ?? '—'}</span> },
     { key: 'status', header: 'Status', render: (p) => <StatusBadge status={p.status} /> },
-    { key: 'time', header: 'Originated', render: (p) => <span className="muted" title={formatDateTime(p.originatedAt)}>{relativeTime(p.originatedAt)}</span> },
+    { key: 'time', header: 'Created', render: (p) => <span className="muted" title={formatDateTime(p.createdAt)}>{relativeTime(p.createdAt)}</span> },
   ];
 
   if (source === 'error') {
@@ -86,10 +79,10 @@ export function Transactions() {
       {source === 'demo' ? <DemoBanner reason={demoReason ?? 'Showing sample data.'} /> : null}
 
       <div className="stat-grid">
-        <StatCard label="Held Transactions" value={held} tone="warn" icon="⏸" />
-        <StatCard label="Blocked" value={blocked} tone="bad" icon="⛔" />
-        <StatCard label="Suspicious (risk ≥ 0.6)" value={suspicious} tone="bad" icon="⚠" />
-        <StatCard label="Flagged" value={flagged} tone="info" icon="⚑" />
+        <StatCard label="Approved" value={approved} tone="good" icon="✓" />
+        <StatCard label="Held" value={held} tone="warn" icon="⏸" />
+        <StatCard label="Declined" value={declined} tone="bad" icon="⛔" />
+        <StatCard label="Needs Review" value={reviewed} tone="info" icon="⚑" />
       </div>
 
       <Card title="Volume by Status">
@@ -100,22 +93,12 @@ export function Transactions() {
         title={`Transactions (${filtered.length})`}
         actions={
           <Toolbar>
-            <SearchInput value={query} onChange={setQuery} placeholder="Search transaction / user…" />
+            <SearchInput value={query} onChange={setQuery} placeholder="Search payment / customer / merchant…" />
             <FilterSelect
               label="Status"
               value={status}
               onChange={setStatus}
-              options={STATUSES.map((s) => ({ value: s, label: s }))}
-            />
-            <FilterSelect
-              label="Risk"
-              value={minRisk}
-              onChange={setMinRisk}
-              options={[
-                { value: 'high', label: 'High (≥0.7)' },
-                { value: 'medium', label: 'Medium (0.4–0.7)' },
-                { value: 'low', label: 'Low (<0.4)' },
-              ]}
+              options={[{ value: 'all', label: 'ALL' }, ...STATUSES.map((s) => ({ value: s, label: s }))]}
             />
             <ToolbarSpacer />
             <button type="button" className="btn" onClick={refetch}>
@@ -124,15 +107,8 @@ export function Transactions() {
           </Toolbar>
         }
       >
-        <DataTable columns={columns} data={filtered} rowKey={(p) => p.id} loading={loading} itemName="transactions" />
+        <DataTable columns={columns} data={filtered} rowKey={(p) => p.paymentId} loading={loading} itemName="transactions" />
       </Card>
     </div>
   );
-}
-
-function riskClass(score?: number): string {
-  const s = score ?? 0;
-  if (s >= 0.7) return 'risk-text-bad';
-  if (s >= 0.4) return 'risk-text-warn';
-  return 'risk-text-good';
 }

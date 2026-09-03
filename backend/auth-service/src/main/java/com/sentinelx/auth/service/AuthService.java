@@ -37,13 +37,15 @@ public class AuthService {
     private final SessionRepository sessions;
     private final PasswordEncoder passwordEncoder;
     private final JwtService jwtService;
+    private final AuthEventPublisher authEvents;
 
     public AuthService(UserRepository users, SessionRepository sessions,
-            PasswordEncoder passwordEncoder, JwtService jwtService) {
+            PasswordEncoder passwordEncoder, JwtService jwtService, AuthEventPublisher authEvents) {
         this.users = users;
         this.sessions = sessions;
         this.passwordEncoder = passwordEncoder;
         this.jwtService = jwtService;
+        this.authEvents = authEvents;
     }
 
     /**
@@ -52,6 +54,21 @@ public class AuthService {
      */
     @Transactional
     public AuthResponse login(LoginRequest request, String ipAddress, String userAgent) {
+        AuthResponse response;
+        try {
+            response = doLogin(request, ipAddress, userAgent);
+        } catch (InvalidCredentialsException e) {
+            authEvents.publish(AuthEventPublisher.LOGIN_FAILED, null, request.username(), ipAddress, e.getMessage());
+            throw e;
+        } catch (AccountBlockedException e) {
+            authEvents.publish(AuthEventPublisher.LOGIN_BLOCKED, null, request.username(), ipAddress, e.getMessage());
+            throw e;
+        }
+        authEvents.publish(AuthEventPublisher.LOGIN_SUCCESS, null, response.user().username(), ipAddress, null);
+        return response;
+    }
+
+    private AuthResponse doLogin(LoginRequest request, String ipAddress, String userAgent) {
         User user = users.findByUsername(request.username())
                 .or(() -> users.findByEmail(request.username()))
                 .orElseThrow(() -> new InvalidCredentialsException("Invalid username or password"));

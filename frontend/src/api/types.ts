@@ -42,20 +42,61 @@ export interface SecurityEvent {
   updatedAt?: string;
 }
 
+export type PaymentStatus = 'PENDING' | 'APPROVED' | 'HELD' | 'DECLINED' | string;
+
+// Mirrors backend PaymentResponse — deviceId/ipAddress arrive pre-masked.
 export interface Payment {
-  id: string;
-  userId?: string;
-  orderId?: string;
+  paymentId: string;
+  customerId: string;
+  merchantId: string;
   amount: number;
   currency: string;
-  paymentMethod: string;
-  transactionId?: string;
-  status: string;
-  riskScore?: number;
-  failureReason?: string;
-  originatedAt?: string;
+  deviceId?: string;
+  ipAddress?: string;
+  status: PaymentStatus;
+  createdAt?: string;
+}
+
+// Retail commerce contracts — mirror the retail-service DTOs.
+export interface Product {
+  id: string;
+  sku: string;
+  name: string;
+  description?: string;
+  category?: string;
+  price: number;
+  currency: string;
+  stock: number;
+  active: boolean;
   createdAt?: string;
   updatedAt?: string;
+}
+
+export interface Order {
+  id: string;
+  userId: string;
+  status: 'PENDING' | 'PROCESSING' | 'SHIPPED' | 'DELIVERED' | 'CANCELLED' | string;
+  totalAmount: number;
+  currency: string;
+  placedAt?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface CartLine {
+  productId: string;
+  sku: string;
+  name: string;
+  quantity: number;
+  unitPrice: number;
+  lineTotal: number;
+}
+
+export interface Cart {
+  userId: string;
+  items: CartLine[];
+  total: number;
+  currency: string;
 }
 
 export interface RiskDecision {
@@ -122,4 +163,6 @@ export interface OverviewStats {
   totalAlerts: number;
   totalTransactions: number;
   openAlerts: number;
+  totalOrders: number;
+  openOrders: number;
 }

@@ -73,6 +73,15 @@ spring:
                 redis-rate-limiter.replenishRate: ${rate-limit.replenish}
                 redis-rate-limiter.burstCapacity: ${rate-limit.burst}
                 redis-rate-limiter.requestedTokens: 1
+        - id: retail
+          uri: http://retail-service:8083
+          predicates: [ Path=/api/retail/** ]
+          filters:
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: ${rate-limit.replenish}
+                redis-rate-limiter.burstCapacity: ${rate-limit.burst}
+                redis-rate-limiter.requestedTokens: 1
         - id: orders
           uri: http://retail-service:8083
           predicates: [ Path=/api/orders/** ]

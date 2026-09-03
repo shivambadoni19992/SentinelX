@@ -23,6 +23,22 @@ spring:
     schemas: retail
     locations: classpath:db/migration
 
+  kafka:
+    bootstrap-servers: ${SPRING_KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      acks: all
+      properties:
+        enable.idempotence: true
+    listener:
+      auto-startup: false
+
+# Retail commerce tunables.
+sentinelx:
+  retail:
+    event-topic: ${RETAIL_EVENT_TOPIC:security.retail}
+
 management:
   endpoints:
     web:

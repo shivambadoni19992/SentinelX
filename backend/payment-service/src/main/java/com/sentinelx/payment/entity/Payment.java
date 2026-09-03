@@ -1,10 +1,11 @@
 package com.sentinelx.payment.entity;
 
 import java.math.BigDecimal;
-import java.time.Instant;
 import java.util.UUID;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
@@ -12,13 +13,20 @@ import jakarta.persistence.Index;
 import jakarta.persistence.Table;
 import jakarta.persistence.UniqueConstraint;
 
-/** A payment attempt (schema payments.payments). */
+/**
+ * A synthetic payment in the processing pipeline (schema payments.payments).
+ *
+ * <p>Contract fields: {@code paymentId, customerId, merchantId, amount,
+ * currency, deviceId, ipAddress, status, createdAt}. Device and IP are stored
+ * in full for fraud analysis but are always masked before leaving the service
+ * (see {@code DataMasker}).
+ */
 @Entity
 @Table(name = "payments", schema = "payments",
-        uniqueConstraints = { @UniqueConstraint(name = "uq_payments_transaction_id", columnNames = "transaction_id") },
+        uniqueConstraints = { @UniqueConstraint(name = "uq_payments_idempotency_key", columnNames = "idempotency_key") },
         indexes = {
-                @Index(name = "idx_payments_user_id", columnList = "user_id"),
-                @Index(name = "idx_payments_order_id", columnList = "order_id"),
+                @Index(name = "idx_payments_customer_id", columnList = "customer_id"),
+                @Index(name = "idx_payments_merchant_id", columnList = "merchant_id"),
                 @Index(name = "idx_payments_status", columnList = "status")
         })
 public class Payment extends Auditable {
@@ -27,11 +35,11 @@ public class Payment extends Auditable {
     @GeneratedValue(strategy = GenerationType.UUID)
     private UUID id;
 
-    @Column(name = "user_id", nullable = false)
-    private UUID userId;
+    @Column(name = "customer_id", nullable = false)
+    private UUID customerId;
 
-    @Column(name = "order_id")
-    private UUID orderId;
+    @Column(name = "merchant_id", nullable = false)
+    private UUID merchantId;
 
     @Column(name = "amount", nullable = false, precision = 19, scale = 4)
     private BigDecimal amount;
@@ -39,42 +47,43 @@ public class Payment extends Auditable {
     @Column(name = "currency", nullable = false, length = 3)
     private String currency = "USD";
 
-    @Column(name = "payment_method", length = 64)
-    private String paymentMethod;
+    @Column(name = "device_id", length = 64)
+    private String deviceId;
 
-    @Column(name = "transaction_id", length = 255)
-    private String transactionId;
+    @Column(name = "ip_address", length = 45)
+    private String ipAddress;
 
-    @Column(name = "status", nullable = false, length = 64)
-    private String status = "PENDING";
+    /** Synthetic lifecycle status; never accepted from the client. */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "status", nullable = false, length = 16)
+    private PaymentStatus status = PaymentStatus.PENDING;
 
-    @Column(name = "risk_score", precision = 5, scale = 2)
-    private BigDecimal riskScore;
+    /** Client-supplied idempotency key (unique). Null when the client omits it. */
+    @Column(name = "idempotency_key", length = 128)
+    private String idempotencyKey;
 
-    @Column(name = "failure_reason")
-    private String failureReason;
-
-    @Column(name = "originated_at")
-    private Instant originatedAt;
+    /** Internal synthetic decision reason; logged/queued, never returned by the API. */
+    @Column(name = "decision_reason", length = 128)
+    private String decisionReason;
 
     public UUID getId() {
         return id;
     }
 
-    public UUID getUserId() {
-        return userId;
+    public UUID getCustomerId() {
+        return customerId;
     }
 
-    public void setUserId(UUID userId) {
-        this.userId = userId;
+    public void setCustomerId(UUID customerId) {
+        this.customerId = customerId;
     }
 
-    public UUID getOrderId() {
-        return orderId;
+    public UUID getMerchantId() {
+        return merchantId;
     }
 
-    public void setOrderId(UUID orderId) {
-        this.orderId = orderId;
+    public void setMerchantId(UUID merchantId) {
+        this.merchantId = merchantId;
     }
 
     public BigDecimal getAmount() {
@@ -93,51 +102,43 @@ public class Payment extends Auditable {
         this.currency = currency;
     }
 
-    public String getPaymentMethod() {
-        return paymentMethod;
+    public String getDeviceId() {
+        return deviceId;
     }
 
-    public void setPaymentMethod(String paymentMethod) {
-        this.paymentMethod = paymentMethod;
+    public void setDeviceId(String deviceId) {
+        this.deviceId = deviceId;
     }
 
-    public String getTransactionId() {
-        return transactionId;
+    public String getIpAddress() {
+        return ipAddress;
     }
 
-    public void setTransactionId(String transactionId) {
-        this.transactionId = transactionId;
+    public void setIpAddress(String ipAddress) {
+        this.ipAddress = ipAddress;
     }
 
-    public String getStatus() {
+    public PaymentStatus getStatus() {
         return status;
     }
 
-    public void setStatus(String status) {
+    public void setStatus(PaymentStatus status) {
         this.status = status;
     }
 
-    public BigDecimal getRiskScore() {
-        return riskScore;
+    public String getIdempotencyKey() {
+        return idempotencyKey;
     }
 
-    public void setRiskScore(BigDecimal riskScore) {
-        this.riskScore = riskScore;
+    public void setIdempotencyKey(String idempotencyKey) {
+        this.idempotencyKey = idempotencyKey;
     }
 
-    public String getFailureReason() {
-        return failureReason;
+    public String getDecisionReason() {
+        return decisionReason;
     }
 
-    public void setFailureReason(String failureReason) {
-        this.failureReason = failureReason;
-    }
-
-    public Instant getOriginatedAt() {
-        return originatedAt;
-    }
-
-    public void setOriginatedAt(Instant originatedAt) {
-        this.originatedAt = originatedAt;
+    public void setDecisionReason(String decisionReason) {
+        this.decisionReason = decisionReason;
     }
 }

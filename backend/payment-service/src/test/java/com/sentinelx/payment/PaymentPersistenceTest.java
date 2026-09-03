@@ -8,6 +8,7 @@ import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.containers.PostgreSQLContainer;
@@ -15,6 +16,7 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 import com.sentinelx.payment.entity.Payment;
+import com.sentinelx.payment.entity.PaymentStatus;
 import com.sentinelx.payment.repository.PaymentRepository;
 
 @SpringBootTest
@@ -37,16 +39,50 @@ class PaymentPersistenceTest {
     @Test
     void paymentRoundTrip() {
         Payment p = new Payment();
-        p.setUserId(UUID.randomUUID());
+        p.setCustomerId(UUID.randomUUID());
+        p.setMerchantId(UUID.randomUUID());
         p.setAmount(new BigDecimal("129.9900"));
         p.setCurrency("USD");
-        p.setPaymentMethod("card");
-        p.setTransactionId("txn-1");
-        p.setStatus("SETTLED");
+        p.setDeviceId("device-9f3ab21c");
+        p.setIpAddress("203.0.113.45");
+        p.setStatus(PaymentStatus.APPROVED);
+        p.setDecisionReason("SYNTHETIC_APPROVAL_42");
         p = payments.saveAndFlush(p);
 
         assertThat(p.getId()).isNotNull();
+        assertThat(p.getCreatedAt()).isNotNull();
         assertThat(payments.findById(p.getId())).isPresent();
-        assertThat(payments.findByStatus("SETTLED")).hasSize(1);
+        assertThat(payments.findByStatusOrderByCreatedAtDesc(PaymentStatus.APPROVED)).hasSize(1);
+        assertThat(payments.findByCustomerIdOrderByCreatedAtDesc(p.getCustomerId())).hasSize(1);
+    }
+
+    @Test
+    void idempotencyKeyIsUnique() {
+        Payment a = sample("key-shared");
+        Payment b = sample("key-shared");
+        payments.saveAndFlush(a);
+        assertThat(payments.findByIdempotencyKey("key-shared")).isPresent();
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> payments.saveAndFlush(b))
+                .isInstanceOf(DataIntegrityViolationException.class);
+    }
+
+    @Test
+    void statusDomainIsConstrainedToProcessingStatuses() {
+        Payment p = sample(null);
+        p.setStatus(PaymentStatus.HELD);
+        assertThat(payments.saveAndFlush(p).getStatus()).isEqualTo(PaymentStatus.HELD);
+    }
+
+    private Payment sample(String idempotencyKey) {
+        Payment p = new Payment();
+        p.setCustomerId(UUID.randomUUID());
+        p.setMerchantId(UUID.randomUUID());
+        p.setAmount(new BigDecimal("42.5000"));
+        p.setCurrency("USD");
+        p.setDeviceId("device-12345678");
+        p.setIpAddress("198.51.100.7");
+        p.setStatus(PaymentStatus.PENDING);
+        p.setIdempotencyKey(idempotencyKey);
+        return p;
     }
 }

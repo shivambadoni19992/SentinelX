@@ -11,6 +11,7 @@ import org.springframework.web.bind.annotation.RestController;
 import com.sentinelx.retail.dto.OrderItemDto;
 import com.sentinelx.retail.entity.OrderItem;
 import com.sentinelx.retail.repository.OrderItemRepository;
+import jakarta.servlet.http.HttpServletRequest;
 
 @RestController
 @RequestMapping("/api/retail/order-items")
@@ -28,7 +29,9 @@ public class OrderItemController {
     }
 
     @PostMapping
-    public ResponseEntity<OrderItemDto> create(@RequestBody OrderItemDto dto) {
+    public ResponseEntity<OrderItemDto> create(@RequestBody OrderItemDto dto, HttpServletRequest http) {
+        // Line items are produced by checkout only; direct writes are privileged.
+        ProductController.requirePrivileged(http);
         OrderItem saved = repository.save(dto.toEntity());
         return ResponseEntity.status(201).body(OrderItemDto.from(saved));
     }

@@ -23,6 +23,26 @@ spring:
     schemas: payments
     locations: classpath:db/migration
 
+  kafka:
+    bootstrap-servers: ${SPRING_KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      acks: all
+      properties:
+        enable.idempotence: true
+    listener:
+      auto-startup: false
+
+# Synthetic payment processing tunables.
+sentinelx:
+  payments:
+    hold-threshold: ${PAYMENT_HOLD_THRESHOLD:10000.00}
+    decline-threshold: ${PAYMENT_DECLINE_THRESHOLD:100000.00}
+    hold-risk-percent: ${PAYMENT_HOLD_RISK_PERCENT:10}
+    decline-risk-percent: ${PAYMENT_DECLINE_RISK_PERCENT:3}
+    event-topic: ${PAYMENT_EVENT_TOPIC:security.payment}
+
 management:
   endpoints:
     web:

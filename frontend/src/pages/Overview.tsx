@@ -3,18 +3,20 @@ import {
   buildTimeseries,
   mockAlerts,
   mockEvents,
+  mockOrders,
   mockPayments,
   mockRiskDecisions,
   mockUsers,
 } from '../api/mock';
 import {
   listAlerts,
+  listOrders,
   listPayments,
   listRiskDecisions,
   listSecurityEvents,
   listUsers,
 } from '../api/endpoints';
-import type { OverviewStats, SecurityAlert } from '../api/types';
+import type { Order, OverviewStats, SecurityAlert } from '../api/types';
 import { useCollection } from '../hooks/useCollection';
 import { Card, StatCard } from '../components/ui/Card';
 import { LineChart, ChartLegend } from '../components/charts/LineChart';
@@ -24,7 +26,7 @@ import { SeverityBadge, StatusBadge } from '../components/ui/Badge';
 import { DemoBanner, ErrorState } from '../components/ui/StateViews';
 import { Spinner } from '../components/ui/Spinner';
 import { Toolbar, FilterSelect, SearchInput, ToolbarSpacer } from '../components/ui/Filter';
-import { lastNHourLabels, relativeTime } from '../lib/format';
+import { lastNHourLabels, relativeTime, shortId, formatCurrency } from '../lib/format';
 
 const COLORS = {
   cyan: '#22d3ee',
@@ -47,6 +49,7 @@ function computeStats(
   payments: typeof mockPayments,
   risks: typeof mockRiskDecisions,
   users: typeof mockUsers,
+  orders: Order[],
 ): OverviewStats {
   const criticalAlerts = alerts.filter(
     (a) =>
@@ -56,9 +59,7 @@ function computeStats(
   const highRiskUsers = users.filter((u) => (u.accountStatus || '').toUpperCase() === 'MONITORED')
     .length;
   const suspicious = payments.filter(
-    (p) =>
-      (p.riskScore ?? 0) >= 0.6 ||
-      ['FLAGGED', 'HELD'].includes((p.status || '').toUpperCase()),
+    (p) => ['HELD', 'DECLINED'].includes((p.status || '').toUpperCase()),
   ).length;
   const held = payments.filter((p) => (p.status || '').toUpperCase() === 'HELD').length;
   const blockedAccounts = users.filter((u) => (u.accountStatus || '').toUpperCase() === 'BLOCKED')
@@ -83,6 +84,10 @@ function computeStats(
     totalAlerts: alerts.length,
     totalTransactions: payments.length,
     openAlerts,
+    totalOrders: orders.length,
+    openOrders: orders.filter((o) =>
+      ['PENDING', 'PROCESSING'].includes((o.status || '').toUpperCase()),
+    ).length,
   };
 }
 
@@ -107,16 +112,20 @@ export function Overview({ onNavigate }: { onNavigate: (r: string) => void }) {
     fallback: 'auto',
     demoLabel: 'Users API unreachable',
   });
+  const orders = useCollection(listOrders, mockOrders, [], {
+    fallback: 'auto',
+    demoLabel: 'Orders API unreachable',
+  });
 
   const [filters, setFilters] = useState<FilterState>({ query: '', severity: 'all', status: 'all' });
 
   const stats = useMemo(
-    () => computeStats(alerts.data, events.data, payments.data, risks.data, users.data),
-    [alerts.data, events.data, payments.data, risks.data, users.data],
+    () => computeStats(alerts.data, events.data, payments.data, risks.data, users.data, orders.data),
+    [alerts.data, events.data, payments.data, risks.data, users.data, orders.data],
   );
 
   const anyLoading = alerts.loading || events.loading || payments.loading || risks.loading || users.loading;
-  const anyDemo = [alerts, events, payments, risks, users].some((c) => c.source === 'demo');
+  const anyDemo = [alerts, events, payments, risks, users, orders].some((c) => c.source === 'demo');
 
   const eventLabels = lastNHourLabels(24);
   const chartData = useMemo(() => buildTimeseries(3, 24), []);
@@ -204,6 +213,30 @@ if (anyLoading) {
     { label: 'Blocked Accounts', value: stats.blockedAccounts, tone: 'bad', icon: '⛔' },
     { label: 'API Attacks', value: stats.apiAttacks, tone: 'warn', icon: '⌗', spark: apiSeries },
     { label: 'Network Threats', value: stats.networkThreats, tone: 'bad', icon: '⬡' },
+    { label: 'Retail Orders', value: stats.totalOrders, tone: 'info', icon: '▤' },
+    { label: 'Open Orders', value: stats.openOrders, tone: 'good', icon: '⇅' },
+  ];
+
+  const byOrderStatus = useMemo(() => {
+    const map: Record<string, number> = {};
+    orders.data.forEach((o) => {
+      const k = (o.status || 'UNKNOWN').toUpperCase();
+      map[k] = (map[k] ?? 0) + 1;
+    });
+    return Object.entries(map).map(([label, value], i) => ({
+      label,
+      value,
+      color: [COLORS.blue, COLORS.amber, COLORS.green, COLORS.violet, COLORS.rose, COLORS.cyan][i % 6],
+    }));
+  }, [orders.data]);
+
+  const recentOrders = orders.data.slice(0, 6);
+  const orderColumns: Column<Order>[] = [
+    { key: 'order', header: 'Order', render: (o) => <span className="mono">{shortId(o.id)}</span> },
+    { key: 'user', header: 'Customer', render: (o) => <span className="muted">{shortId(o.userId, 10)}</span> },
+    { key: 'total', header: 'Total', render: (o) => <strong>{formatCurrency(o.totalAmount, o.currency)}</strong> },
+    { key: 'status', header: 'Status', render: (o) => <StatusBadge status={o.status} /> },
+    { key: 'time', header: 'Placed', render: (o) => <span className="muted">{relativeTime(o.placedAt)}</span> },
   ];
 
   return (
@@ -263,7 +296,20 @@ if (anyLoading) {
         <Card title="Transactions by Status">
           <DonutChart data={byTxnStatus} centerValue={stats.totalTransactions} centerLabel="transactions" />
         </Card>
+        <Card title="Orders by Status">
+          <DonutChart data={byOrderStatus} centerValue={stats.totalOrders} centerLabel="orders" />
+        </Card>
       </div>
+
+      <Card title="Recent Orders">
+        <DataTable
+          columns={orderColumns}
+          data={recentOrders}
+          rowKey={(o) => o.id}
+          loading={orders.loading}
+          itemName="orders"
+        />
+      </Card>
 
       <Card
         title="Priority Alerts"

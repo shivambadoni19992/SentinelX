@@ -23,6 +23,42 @@ spring:
     schemas: events
     locations: classpath:db/migration
 
+  kafka:
+    bootstrap-servers: ${SPRING_KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    consumer:
+      group-id: sentinelx-security-event-normalizer
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      enable-auto-commit: false
+      properties:
+        max.poll.records: 200
+        isolation.level: read_committed
+    listener:
+      ack-mode: manual_immediate
+      concurrency: 2
+    producer:
+      # Producer used by the dead-letter recoverer.
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      acks: all
+      properties:
+        enable.idempotence: true
+
+# Kafka event topology consumed by this service.
+sentinelx:
+  security-events:
+    topics:
+      - security.auth
+      - security.payment
+      - security.api
+      - security.retail
+      - security.network
+      - security.risk
+      - security.alert
+      - security.audit
+
+
 management:
   endpoints:
     web:
