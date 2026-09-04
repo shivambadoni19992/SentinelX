@@ -14,6 +14,8 @@ import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
+import com.sentinelx.simulation.domain.SimulationStatus;
+import com.sentinelx.simulation.domain.SimulationType;
 import com.sentinelx.simulation.entity.SimulationRun;
 import com.sentinelx.simulation.repository.SimulationRunRepository;
 
@@ -36,16 +38,19 @@ class SimulationPersistenceTest {
 
     @Test
     void simulationRunRoundTrip() {
-        SimulationRun s = new SimulationRun();
-        s.setName("Brute force drill");
-        s.setScenario("BRUTE_FORCE");
-        s.setConfig(Map.of("targets", 500, "ramp", "slow"));
-        s.setStartedAt(Instant.now());
-        s = runs.saveAndFlush(s);
+        SimulationRun run = new SimulationRun();
+        run.setName("Brute force drill");
+        run.setType(SimulationType.BRUTE_FORCE.name());
+        run.setConfiguration(Map.of("numberOfUsers", 500, "durationSeconds", 60));
+        run.setStatus(SimulationStatus.QUEUED.name());
+        run.setStartedAt(Instant.now());
+        run = runs.saveAndFlush(run);
 
-        assertThat(s.getId()).isNotNull();
-        assertThat(runs.findByStatus("PENDING")).hasSize(1);
-        SimulationRun loaded = runs.findById(s.getId()).orElseThrow();
+        assertThat(run.getId()).isNotNull();
+        assertThat(runs.findByStatus(SimulationStatus.QUEUED.name())).hasSize(1);
+        SimulationRun loaded = runs.findById(run.getId()).orElseThrow();
         assertThat(loaded.getName()).isEqualTo("Brute force drill");
+        assertThat(loaded.getConfiguration()).containsEntry("numberOfUsers", 500);
+        assertThat(loaded.getErrors()).isEmpty();
     }
 }

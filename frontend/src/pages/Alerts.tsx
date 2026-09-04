@@ -1,18 +1,19 @@
 import { useMemo, useState } from 'react';
 import { mockAlerts } from '../api/mock';
-import { listAlerts } from '../api/endpoints';
+import { listAlerts, applyAlertAction, updateAlertStatus } from '../api/endpoints';
 import type { SecurityAlert } from '../api/types';
 import { useCollection } from '../hooks/useCollection';
 import { Card } from '../components/ui/Card';
 import { DataTable, type Column } from '../components/ui/DataTable';
-import { SeverityBadge, StatusBadge } from '../components/ui/Badge';
+import { SeverityBadge } from '../components/ui/Badge';
 import { DemoBanner, ErrorState } from '../components/ui/StateViews';
 import { Toolbar, FilterSelect, SearchInput, ToolbarSpacer } from '../components/ui/Filter';
 import { donutColors, relativeTime, formatDateTime } from '../lib/format';
 import { DonutChart } from '../components/charts/DonutChart';
 
 const SEVERITIES = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'];
-const STATUSES = ['OPEN', 'INVESTIGATING', 'ACKNOWLEDGED', 'RESOLVED', 'DISMISSED'];
+const STATUSES = ['OPEN', 'INVESTIGATING', 'RESOLVED', 'FALSE_POSITIVE'];
+const ACTIONS = ['ALLOW', 'MONITOR', 'REQUIRE_VERIFICATION', 'HOLD_TRANSACTION', 'BLOCK_ACCOUNT', 'RATE_LIMIT'];
 
 export function Alerts() {
   const { data, loading, source, error, demoReason, refetch } = useCollection(
@@ -26,6 +27,37 @@ export function Alerts() {
   const [severity, setSeverity] = useState('all');
   const [status, setStatus] = useState('all');
   const [entity, setEntity] = useState('all');
+  const [selectedAction, setSelectedAction] = useState<Record<string, string>>({});
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  async function applyAction(alert: SecurityAlert) {
+    const action = selectedAction[alert.id];
+    if (!action) return;
+    setBusyId(alert.id);
+    setActionError(null);
+    try {
+      await applyAlertAction(alert.id, action, 'soc-analyst');
+      refetch();
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : 'Failed to apply action.');
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function changeStatus(alert: SecurityAlert, next: string) {
+    setBusyId(alert.id);
+    setActionError(null);
+    try {
+      await updateAlertStatus(alert.id, next, 'soc-analyst');
+      refetch();
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : 'Failed to update status.');
+    } finally {
+      setBusyId(null);
+    }
+  }
 
   const entities = useMemo(
     () => Array.from(new Set(data.map((a) => a.entityType).filter(Boolean))).sort(),
@@ -74,7 +106,42 @@ export function Alerts() {
     { key: 'severity', header: 'Severity', render: (a) => <SeverityBadge severity={a.severity} /> },
     { key: 'entity', header: 'Entity', render: (a) => <span className="muted">{a.entityType}</span> },
     { key: 'assigned', header: 'Assigned', render: (a) => <span className="muted">{a.assignedTo ?? '—'}</span> },
-    { key: 'status', header: 'Status', render: (a) => <StatusBadge status={a.status} /> },
+    { key: 'status', header: 'Status', render: (a) => (
+        <select
+          className="filter-select"
+          value={a.status || 'OPEN'}
+          disabled={busyId === a.id}
+          onChange={(e) => changeStatus(a, e.target.value)}
+        >
+          {STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
+        </select>
+      ) },
+    {
+      key: 'action',
+      header: 'Response Action',
+      render: (a) => (
+        <div className="alert-action-cell">
+          <select
+            className="filter-select"
+            value={selectedAction[a.id] ?? ''}
+            disabled={busyId === a.id}
+            onChange={(e) => setSelectedAction((m) => ({ ...m, [a.id]: e.target.value }))}
+          >
+            <option value="" disabled>Choose action…</option>
+            {ACTIONS.map((x) => <option key={x} value={x}>{x}</option>)}
+          </select>
+          <button
+            type="button"
+            className="btn"
+            disabled={!selectedAction[a.id] || busyId === a.id}
+            onClick={() => applyAction(a)}
+          >
+            {busyId === a.id ? '…' : 'Apply'}
+          </button>
+          {a.action ? <span className="muted">last: {a.action}</span> : null}
+        </div>
+      ),
+    },
     { key: 'triggered', header: 'Triggered', render: (a) => <span className="muted" title={formatDateTime(a.triggeredAt)}>{relativeTime(a.triggeredAt)}</span> },
   ];
 
@@ -85,12 +152,13 @@ export function Alerts() {
   return (
     <div className="page">
       {source === 'demo' ? <DemoBanner reason={demoReason ?? 'Showing sample data.'} /> : null}
+      {actionError ? <div className="demo-banner" role="alert">{actionError}</div> : null}
 
       <div className="grid-2">
         <Card title="Open & Investigating">
           <DonutChart
             data={bySeverity}
-            centerValue={data.filter((a) => a.status !== 'RESOLVED' && a.status !== 'DISMISSED').length}
+            centerValue={data.filter((a) => a.status !== 'RESOLVED' && a.status !== 'FALSE_POSITIVE').length}
             centerLabel="active"
           />
         </Card>

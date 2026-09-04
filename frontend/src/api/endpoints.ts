@@ -33,6 +33,22 @@ export function fetchServices(): Promise<ServiceHealth[]> {
 // Reachable, authenticated endpoints ------------------------------------------
 export const listUsers = () => apiFetch<User[]>('/api/auth/users');
 export const listAlerts = () => apiFetch<SecurityAlert[]>('/api/alerts');
+
+/** POST /api/alerts/{id}/action — applies a response action (state-changing). */
+export function applyAlertAction(id: string, action: string, actor: string): Promise<SecurityAlert> {
+  return apiFetch<SecurityAlert>(`/api/alerts/${id}/action`, {
+    method: 'POST',
+    body: JSON.stringify({ action, actor }),
+  });
+}
+
+/** PATCH /api/alerts/{id}/status — moves the alert through its lifecycle. */
+export function updateAlertStatus(id: string, status: string, actor: string): Promise<SecurityAlert> {
+  return apiFetch<SecurityAlert>(`/api/alerts/${id}/status`, {
+    method: 'PATCH',
+    body: JSON.stringify({ status, actor }),
+  });
+}
 export const listPayments = () => apiFetch<Payment[]>('/api/payments');
 
 export interface NewPayment {
@@ -86,7 +102,12 @@ export const listDetections = () => apiFetch<SecurityEvent[]>('/api/detections')
 export interface NewSimulation {
   name: string;
   description?: string;
-  scenario: string;
+  /** SimulationType, e.g. BRUTE_FORCE. */
+  type?: string;
+  /** New-style parameters (SimulationConfig + type-specific knobs). */
+  configuration?: Record<string, unknown>;
+  /** Legacy alias kept for the Phase 1 scaffold API. */
+  scenario?: string;
   config?: Record<string, unknown>;
   status?: string;
   runBy?: string;

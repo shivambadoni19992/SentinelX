@@ -2,11 +2,14 @@ package com.sentinelx.simulation;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.scheduling.annotation.EnableScheduling;
 
 /**
- * SentinelX simulation-service — Phase 1 scaffold. Health via Spring Boot Actuator.
+ * SentinelX simulation-service — generates realistic synthetic traffic that
+ * flows through the real security pipeline (detection → risk → alert).
  */
 @SpringBootApplication
+@EnableScheduling
 public class SimulationServiceApplication {
 
     public static void main(String[] args) {

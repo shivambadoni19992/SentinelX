@@ -18,8 +18,11 @@ export interface SecurityAlert {
   entityType: string;
   entityId?: string;
   eventId?: string;
-  status: 'OPEN' | 'ACKNOWLEDGED' | 'INVESTIGATING' | 'RESOLVED' | 'DISMISSED' | string;
+  status: 'OPEN' | 'INVESTIGATING' | 'RESOLVED' | 'FALSE_POSITIVE' | string;
   assignedTo?: string;
+  action?: string;
+  actor?: string;
+  actionDetail?: Record<string, unknown>;
   triggeredAt?: string;
   createdAt?: string;
   updatedAt?: string;
@@ -128,14 +131,24 @@ export interface AuditLog {
 }
 
 export interface SimulationRun {
-  id: string;
-  name: string;
+  id?: string;
+  simulationId?: string;
+  name?: string;
   description?: string;
-  scenario: string;
+  scenario?: string;
+  type?: string;
+  configuration?: Record<string, unknown>;
   config?: Record<string, unknown>;
-  status: 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED' | string;
+  status: 'QUEUED' | 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED' | string;
   startedAt?: string;
   completedAt?: string;
+  eventsGenerated?: number;
+  eventsProcessed?: number;
+  detections?: number;
+  riskDecisions?: number;
+  alerts?: number;
+  actions?: number;
+  errors?: string[];
   runBy?: string;
   createdAt?: string;
   updatedAt?: string;

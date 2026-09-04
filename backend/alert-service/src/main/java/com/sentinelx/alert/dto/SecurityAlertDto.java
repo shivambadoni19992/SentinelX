@@ -1,6 +1,7 @@
 package com.sentinelx.alert.dto;
 
 import java.time.Instant;
+import java.util.Map;
 import java.util.UUID;
 import com.sentinelx.alert.entity.SecurityAlert;
 
@@ -15,6 +16,9 @@ public record SecurityAlertDto(
         UUID eventId,
         String status,
         String assignedTo,
+        String action,
+        String actor,
+        Map<String, Object> actionDetail,
         Instant triggeredAt,
         Instant createdAt,
         Instant updatedAt) {
@@ -22,6 +26,7 @@ public record SecurityAlertDto(
     public static SecurityAlertDto from(SecurityAlert a) {
         return new SecurityAlertDto(a.getId(), a.getTitle(), a.getDescription(), a.getSeverity(),
                 a.getEntityType(), a.getEntityId(), a.getEventId(), a.getStatus(), a.getAssignedTo(),
+                a.getAction(), a.getActor(), a.getActionDetail(),
                 a.getTriggeredAt(), a.getCreatedAt(), a.getUpdatedAt());
     }
 

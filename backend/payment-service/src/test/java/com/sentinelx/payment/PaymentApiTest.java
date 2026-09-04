@@ -302,7 +302,7 @@ class PaymentApiTest {
                 .path("paymentId").asText();
 
         ArgumentCaptor<String> payload = ArgumentCaptor.forClass(String.class);
-        verify(kafkaTemplate).send(eq("sentinelx.payments.created"), eq(paymentId), payload.capture());
+        verify(kafkaTemplate).send(eq("security.payment"), eq(paymentId), payload.capture());
         assertThat(payload.getValue())
                 .contains("\"eventType\":\"PAYMENT_CREATED\"")
                 .contains("\"customerId\":\"" + customer + "\"")

@@ -35,7 +35,7 @@ public class ApiExceptionHandler {
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<ApiError> onValidation(MethodArgumentNotValidException e) {
-        List<FieldIssue> issues = e.getBindingResult().getFieldErrors().stream()
+        List<ApiError.FieldIssue> issues = e.getBindingResult().getFieldErrors().stream()
                 .map(fe -> new ApiError.FieldIssue(fe.getField(), fe.getDefaultMessage()))
                 .toList();
         String first = issues.isEmpty() ? "Validation failed" : issues.get(0).message();

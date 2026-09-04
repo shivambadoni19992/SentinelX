@@ -49,6 +49,7 @@ public class WebSecurityConfig {
                     .requestMatchers("/api/auth/login").permitAll()
                     .requestMatchers("/actuator/**").permitAll()
                     .requestMatchers("/error").permitAll()
+                    .requestMatchers("/internal/**").permitAll() // service-to-service response actions
                     .anyRequest().authenticated())
             .addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class);
 

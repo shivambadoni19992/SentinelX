@@ -6,6 +6,28 @@ spring:
     name: sentinelx-detection-engine
   profiles:
     active: ${SPRING_PROFILES_ACTIVE:default}
+  kafka:
+    bootstrap-servers: ${SPRING_KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    consumer:
+      group-id: sentinelx-detection-engine
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      enable-auto-commit: false
+      properties:
+        max.poll.records: 200
+        isolation.level: read_committed
+    listener:
+      ack-mode: manual_immediate
+      concurrency: 2
+    producer:
+      # Producer used to publish raised detections to security.risk and by the
+      # dead-letter recoverer for poison records.
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      acks: all
+      properties:
+        enable.idempotence: true
 
 management:
   endpoints:

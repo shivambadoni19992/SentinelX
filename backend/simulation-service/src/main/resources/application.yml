@@ -1,5 +1,5 @@
 server:
-  port: 8088
+  port: ${SERVER_PORT:8088}
 
 spring:
   application:
@@ -22,6 +22,40 @@ spring:
     create-schemas: true
     schemas: simulator
     locations: classpath:db/migration
+
+  kafka:
+    bootstrap-servers: ${SPRING_KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      acks: all
+      properties:
+        enable.idempotence: true
+        linger.ms: 5
+        compression.type: lz4
+    consumer:
+      group-id: sentinelx-simulation-tracker
+      auto-offset-reset: latest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      enable-auto-commit: false
+      properties:
+        max.poll.records: 500
+    listener:
+      ack-mode: manual_immediate
+      concurrency: 1
+
+# Safe upper limits enforced when a SimulationConfig is validated.
+sentinelx:
+  simulation:
+    max-concurrent-runs: 4
+    limits:
+      max-users: 10000
+      max-devices: 10000
+      max-ip-addresses: 10000
+      max-duration-seconds: 600
+      max-events-per-second: 1000
+      max-total-events: 50000
 
 management:
   endpoints:

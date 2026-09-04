@@ -92,7 +92,7 @@ public class PaymentController {
 
     /** Location URI helper (kept package-visible for tests). */
     static String locationFor(UUID paymentId) {
-        return UriComponentsBuilder.fromPath("/api/payments/{id}").build(paymentId);
+        return UriComponentsBuilder.fromPath("/api/payments/{id}").buildAndExpand(paymentId).toUriString();
     }
 
     private static String normalizeKey(String key) {

@@ -27,7 +27,7 @@ export function SimulationHistory() {
   const [scenario, setScenario] = useState('all');
 
   const scenarios = useMemo(
-    () => Array.from(new Set(data.map((s) => s.scenario).filter(Boolean))).sort(),
+    () => Array.from(new Set(data.map((s) => s.type ?? s.scenario).filter(Boolean))).sort(),
     [data],
   );
 
@@ -39,7 +39,8 @@ export function SimulationHistory() {
           !q ||
           (s.name || '').toLowerCase().includes(q) ||
           (s.runBy || '').toLowerCase().includes(q) ||
-          (s.scenario || '').toLowerCase().includes(q);
+          (s.scenario || '').toLowerCase().includes(q) ||
+          (s.type || '').toLowerCase().includes(q);
         const matchesStatus = status === 'all' || (s.status || '').toUpperCase() === status;
         const matchesScenario = scenario === 'all' || s.scenario === scenario;
         return matchesQ && matchesStatus && matchesScenario;
@@ -86,7 +87,7 @@ export function SimulationHistory() {
         </div>
       ),
     },
-    { key: 'scenario', header: 'Scenario', render: (s) => <span>{s.scenario}</span> },
+    { key: 'scenario', header: 'Type', render: (s) => <span>{s.type ?? s.scenario}</span> },
     { key: 'status', header: 'Status', render: (s) => <StatusBadge status={s.status} /> },
     { key: 'runby', header: 'Run By', render: (s) => <span className="muted">{s.runBy ?? '—'}</span> },
     {
@@ -131,7 +132,7 @@ export function SimulationHistory() {
           <Toolbar>
             <SearchInput value={query} onChange={setQuery} placeholder="Search runs…" />
             <FilterSelect label="Status" value={status} onChange={setStatus} options={STATUSES.map((s) => ({ value: s, label: s }))} />
-            <FilterSelect label="Scenario" value={scenario} onChange={setScenario} options={scenarios.map((s) => ({ value: s, label: s }))} />
+            <FilterSelect label="Type" value={scenario} onChange={setScenario} options={scenarios.map((s) => ({ value: s ?? '', label: s ?? '' }))} />
             <ToolbarSpacer />
             <button type="button" className="btn" onClick={refetch}>
               Refresh
@@ -139,7 +140,7 @@ export function SimulationHistory() {
           </Toolbar>
         }
       >
-        <DataTable columns={columns} data={filtered} rowKey={(s) => s.id} loading={loading} itemName="simulation runs" />
+        <DataTable columns={columns} data={filtered} rowKey={(s) => s.simulationId ?? s.id ?? ''} loading={loading} itemName="simulation runs" />
       </Card>
     </div>
   );

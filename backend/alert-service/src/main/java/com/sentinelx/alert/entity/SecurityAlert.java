@@ -1,7 +1,11 @@
 package com.sentinelx.alert.entity;
 
 import java.time.Instant;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.UUID;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.GeneratedValue;
@@ -50,6 +54,19 @@ public class SecurityAlert extends Auditable {
 
     @Column(name = "triggered_at", nullable = false)
     private Instant triggeredAt = Instant.now();
+
+    /** Last response action applied to this alert (nullable). */
+    @Column(name = "action", length = 64)
+    private String action;
+
+    /** Analyst or system principal that applied the action. */
+    @Column(name = "actor", length = 128)
+    private String actor;
+
+    /** Structured detail of the applied action (downstream state changes). */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "action_detail")
+    private Map<String, Object> actionDetail = new HashMap<>();
 
     public UUID getId() {
         return id;
@@ -125,5 +142,29 @@ public class SecurityAlert extends Auditable {
 
     public void setTriggeredAt(Instant triggeredAt) {
         this.triggeredAt = triggeredAt;
+    }
+
+    public String getAction() {
+        return action;
+    }
+
+    public void setAction(String action) {
+        this.action = action;
+    }
+
+    public String getActor() {
+        return actor;
+    }
+
+    public void setActor(String actor) {
+        this.actor = actor;
+    }
+
+    public Map<String, Object> getActionDetail() {
+        return actionDetail;
+    }
+
+    public void setActionDetail(Map<String, Object> actionDetail) {
+        this.actionDetail = actionDetail == null ? new HashMap<>() : actionDetail;
     }
 }

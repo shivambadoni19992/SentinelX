@@ -660,3 +660,63 @@
   .donut-center-value { font-size: 20px; }
 }
 }.why-panel{display:flex;flex-direction:column;gap:10px}.why-signal ul{margin:4px 0 0 18px;padding:0}.why-signal li{color:var(--text-secondary,#94a3b8)}
+.alert-action-cell{display:flex;align-items:center;gap:8px}.alert-action-cell .muted{margin-left:4px;font-size:12px}
+
+/* ---------------- Simulation Center: dynamic parameter form ---------------- */
+.sim-side { display: grid; gap: 18px; align-content: start; }
+.sim-section {
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  border-radius: 10px;
+  padding: 12px 14px 14px;
+  margin: 0;
+}
+.sim-section legend {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  padding: 0 6px;
+}
+.sim-section-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 12px; }
+.sim-field { display: grid; gap: 4px; }
+.sim-field-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.sim-field-label { font-size: 13px; font-weight: 500; }
+.sim-field-value { font-variant-numeric: tabular-nums; font-weight: 600; color: var(--accent); }
+.sim-field-value em { font-style: normal; font-size: 11px; color: var(--muted); }
+.sim-field-controls { display: grid; grid-template-columns: 1fr 84px; gap: 8px; align-items: center; }
+.sim-field-controls input[type='range'] { width: 100%; padding: 0; accent-color: var(--accent); }
+.sim-number {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font-variant-numeric: tabular-nums;
+}
+.sim-field-range { font-size: 11px; }
+.sim-field-invalid .sim-number { border-color: #f87171; }
+.sim-field-invalid .sim-field-label { color: #f87171; }
+.sim-select-field select { max-width: 100%; }
+.sim-checkbox { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.sim-checkbox input { accent-color: var(--accent); width: 16px; height: 16px; }
+.sim-errors ul { margin: 6px 0 0 16px; padding: 0; }
+.sim-estimates { display: grid; gap: 10px; }
+.sim-estimate {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  border-radius: 10px;
+}
+.sim-estimate-label { font-size: 13px; color: var(--muted); }
+.sim-estimate strong { font-variant-numeric: tabular-nums; font-size: 16px; }
+.sim-estimate-bad { border-color: #f87171; }
+.sim-estimate-bad strong { color: #f87171; }
+
+/* ---------------- Simulation Center: live pipeline panel ---------------- */
+.live-pipeline { margin-top: 6px; }
+.live-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
