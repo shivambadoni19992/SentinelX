@@ -659,4 +659,4 @@
   .hbar-row { grid-template-columns: 100px 1fr 40px; }
   .donut-center-value { font-size: 20px; }
 }
-}
+}.why-panel{display:flex;flex-direction:column;gap:10px}.why-signal ul{margin:4px 0 0 18px;padding:0}.why-signal li{color:var(--text-secondary,#94a3b8)}

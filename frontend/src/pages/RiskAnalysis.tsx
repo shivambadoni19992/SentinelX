@@ -32,6 +32,28 @@ export function RiskAnalysis() {
   const [query, setQuery] = useState('');
   const [level, setLevel] = useState('all');
   const [action, setAction] = useState('all');
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  /** Human-readable reasons a decision scored the way it did. */
+  function decisionReasons(d: RiskDecision): Array<{ label: string; points?: number; reasons: string[] }> {
+    const factors = (d.factors ?? {}) as {
+      signals?: Record<string, unknown>;
+      reasons?: unknown;
+    };
+    const signals = factors.signals ?? {};
+    const rawReasons = Array.isArray(factors.reasons) ? (factors.reasons as unknown[]) : [];
+    return Object.entries(signals)
+      .sort((a, b) => Number(b[1]) - Number(a[1]))
+      .map(([signal, points]) => ({
+        label: signal,
+        points: typeof points === 'number' ? points : undefined,
+        reasons: rawReasons.filter(
+          (r) => typeof r === 'string' && r.toLowerCase().startsWith(signal.toLowerCase().slice(0, 4)),
+        ) as string[],
+      }));
+  }
+
+  const selected = decisions.data.find((d) => d.id === selectedId) ?? null;
 
   const filtered = useMemo(() => {
     const q = query.toLowerCase();
@@ -170,8 +192,56 @@ export function RiskAnalysis() {
           rowKey={(d) => d.id}
           loading={decisions.loading}
           itemName="risk decisions"
+          onRowClick={(d) => setSelectedId((cur) => (cur === d.id ? null : d.id))}
         />
       </Card>
+
+      {selected ? (
+        <Card
+          title={`Why this score — ${selected.subjectType} · ${selected.riskLevel} · ${(selected.riskScore ?? 0).toFixed(2)}`}
+          actions={
+            <button type="button" className="btn" onClick={() => setSelectedId(null)}>
+              Close
+            </button>
+          }
+        >
+          <div className="why-panel">
+            <p className="muted">
+              Action <StatusBadge status={selected.action} /> · decided{' '}
+              {relativeTime(selected.decisionAt)} · window{' '}
+              {String(
+                ((selected.factors as { windowMinutes?: number } | undefined)?.windowMinutes) ?? 15,
+              )}{' '}
+              min
+            </p>
+            {(() => {
+              const signals = decisionReasons(selected);
+              if (!signals.length) {
+                return (
+                  <p className="muted">
+                    No per-signal breakdown recorded for this decision.
+                  </p>
+                );
+              }
+              return signals.map(({ label, points, reasons }) => (
+                <div key={label} className="why-signal">
+                  <strong>
+                    {label.split('_').join(' ').toLowerCase()}
+                    {points !== undefined ? ` · +${points} pts` : ''}
+                  </strong>
+                  {reasons.length ? (
+                    <ul>
+                      {reasons.map((r, i) => (
+                        <li key={i}>{r}</li>
+                      ))}
+                    </ul>
+                  ) : null}
+                </div>
+              ));
+            })()}
+          </div>
+        </Card>
+      ) : null}
     </div>
   );
 }
