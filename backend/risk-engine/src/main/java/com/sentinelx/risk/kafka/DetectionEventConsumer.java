@@ -67,7 +67,10 @@ public class DetectionEventConsumer {
         String subject = payload.path("subject").asText(null);
         String correlationId = RiskKafkaConfig.correlationId(record,
                 payload.path("correlationId").asText(null));
-        String eventId = payload.path("detectionId").asText(correlationId);
+        // Prefer the originating correlation id so it threads through to the
+        // RISK_DECIDED event and lets the simulation tracker attribute the whole
+        // chain (detection → risk → alert → action) back to a run.
+        String eventId = payload.path("correlationId").asText(correlationId);
         String reason = payload.path("reason").asText(null);
         Instant at = instant(payload);
         scoring.onSignal(subject, record.topic(), null, signal, ruleId, reason, eventId, at);

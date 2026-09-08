@@ -55,6 +55,10 @@ sentinelx:
     auth-service-url: ${AUTH_SERVICE_URL:http://localhost:8081}
     rate-limit-ttl: PT15M
     verification-ttl: PT24H
+    # Auto-apply RATE_LIMIT (MEDIUM) / BLOCK_ACCOUNT (HIGH/CRITICAL) when a
+    # RISK_DECIDED alert is opened. Synthetic simulations rely on this to
+    # exercise real response actions.
+    auto-apply-risk-actions: ${AUTO_APPLY_RISK_ACTIONS:true}
 
 management:
   endpoints:

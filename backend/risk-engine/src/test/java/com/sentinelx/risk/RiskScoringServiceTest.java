@@ -136,6 +136,35 @@ class RiskScoringServiceTest {
     }
 
     @Test
+    @DisplayName("TRANSACTION_VELOCITY reaches HIGH on its own via stacking (35 x 2 = 70)")
+    void velocityReachesHigh() {
+        Instant now = Instant.now();
+        ScoredDecision d = RiskScoringService.score(List.of(
+                hit(RiskSignal.TRANSACTION_VELOCITY, now),
+                hit(RiskSignal.TRANSACTION_VELOCITY, now)));
+        assertThat(d.score()).isEqualTo(70);
+        assertThat(d.level()).isEqualTo(RiskLevel.HIGH);
+        assertThat(d.action()).isEqualTo("CHALLENGE");
+    }
+
+    @Test
+    @DisplayName("TRANSACTION_VELOCITY + NEW_DEVICE + SUSPICIOUS_IP reaches CRITICAL for HOLD_TRANSACTION")
+    void velocityCombinedReachesCritical() {
+        Instant now = Instant.now();
+        ScoredDecision d = RiskScoringService.score(List.of(
+                hit(RiskSignal.TRANSACTION_VELOCITY, now),
+                hit(RiskSignal.TRANSACTION_VELOCITY, now),
+                hit(RiskSignal.NEW_DEVICE, now),
+                hit(RiskSignal.NEW_DEVICE, now),
+                hit(RiskSignal.SUSPICIOUS_IP, now),
+                hit(RiskSignal.SUSPICIOUS_IP, now)));
+        // 70 + 30 + 50 = 150 → capped at 100
+        assertThat(d.score()).isEqualTo(100);
+        assertThat(d.level()).isEqualTo(RiskLevel.CRITICAL);
+        assertThat(d.action()).isEqualTo("BLOCK");
+    }
+
+    @Test
     @DisplayName("every reason is human-readable and names the signal")
     void reasonsExplainScore() {
         ScoredDecision d = RiskScoringService.score(List.of(

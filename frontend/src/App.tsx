@@ -13,6 +13,8 @@ import { RiskAnalysis } from './pages/RiskAnalysis';
 import { AuditLogs } from './pages/AuditLogs';
 import { SimulationCenter } from './pages/SimulationCenter';
 import { SimulationHistory } from './pages/SimulationHistory';
+import { Metrics } from './pages/Metrics';
+import { GrafanaDashboards } from './pages/GrafanaDashboards';
 import { SystemHealth } from './pages/SystemHealth';
 import './App.css';
 
@@ -106,6 +108,10 @@ function App() {
         return <SimulationCenter key={refreshTick} user={user ?? undefined} />;
       case 'simulation-history':
         return <SimulationHistory key={refreshTick} />;
+      case 'metrics':
+        return <Metrics key={refreshTick} />;
+      case 'grafana-dashboards':
+        return <GrafanaDashboards key={refreshTick} />;
       case 'system-health':
         return <SystemHealth key={refreshTick} gateway={gateway} />;
       case 'overview':

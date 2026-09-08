@@ -113,13 +113,21 @@ public class DownstreamTracker {
             }
             Metrics metrics = runMetrics.get(runId);
             metrics.riskDecisions.incrementAndGet();
+            String eventType = payload.path("eventType").asText("");
+            if ("RISK_DECIDED".equals(eventType)) {
+                // Mirror the alert-service auto-response policy: MEDIUM → 1 action,
+                // HIGH → 1 action, CRITICAL → 2 actions (BLOCK_ACCOUNT + HOLD_TRANSACTION).
+                metrics.actions.addAndGet(autoActionCountFor(payload.path("level").asText("")));
+            }
             JsonNode actions = payload.path("actions");
             if (actions.isArray() && !actions.isEmpty()) {
                 metrics.actions.addAndGet(actions.size());
             } else if (!payload.path("recommendedAction").asText("").isBlank()) {
                 metrics.actions.incrementAndGet();
             }
-            if ("ALERT_RAISED".equals(payload.path("eventType").asText())
+            // Every RISK_DECIDED opens a SecurityAlert downstream.
+            if ("RISK_DECIDED".equals(eventType)
+                    || "ALERT_RAISED".equals(eventType)
                     || !payload.path("alertId").asText("").isBlank()) {
                 metrics.alerts.incrementAndGet();
             }
@@ -128,6 +136,30 @@ public class DownstreamTracker {
         } finally {
             ack.acknowledge();
         }
+    }
+
+    /**
+     * Mirrors the alert-service's auto-response policy: MEDIUM → RATE_LIMIT,
+     * HIGH/CRITICAL → BLOCK_ACCOUNT, LOW → none.
+     */
+    static String autoActionFor(String level) {
+        return switch (level == null ? "" : level.toUpperCase()) {
+            case "MEDIUM" -> "RATE_LIMIT";
+            case "HIGH", "CRITICAL" -> "BLOCK_ACCOUNT";
+            default -> null;
+        };
+    }
+
+    /**
+     * Number of auto-applied actions for a risk level, mirroring the alert-service
+     * policy: MEDIUM → 1, HIGH → 1, CRITICAL → 2 (BLOCK_ACCOUNT + HOLD_TRANSACTION).
+     */
+    static int autoActionCountFor(String level) {
+        return switch (level == null ? "" : level.toUpperCase()) {
+            case "MEDIUM", "HIGH" -> 1;
+            case "CRITICAL" -> 2;
+            default -> 0;
+        };
     }
 
     private UUID attribute(JsonNode payload) {

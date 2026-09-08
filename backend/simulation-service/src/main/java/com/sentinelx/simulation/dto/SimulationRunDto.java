@@ -25,6 +25,7 @@ public record SimulationRunDto(
         long riskDecisions,
         long alerts,
         long actions,
+        Map<String, Object> metrics,
         List<String> errors,
         String name,
         String description,
@@ -38,7 +39,7 @@ public record SimulationRunDto(
                 run.getStartedAt(), run.getCompletedAt(),
                 run.getEventsGenerated(), run.getEventsProcessed(), run.getDetections(),
                 run.getRiskDecisions(), run.getAlerts(), run.getActions(),
-                run.getErrors(), run.getName(), run.getDescription(), run.getRunBy(),
+                run.getMetrics(), run.getErrors(), run.getName(), run.getDescription(), run.getRunBy(),
                 run.getCreatedAt(), run.getUpdatedAt());
     }
 }

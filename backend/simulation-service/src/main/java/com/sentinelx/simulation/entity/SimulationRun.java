@@ -85,6 +85,11 @@ public class SimulationRun extends Auditable {
     @Column(name = "errors", nullable = false)
     private List<String> errors = new ArrayList<>();
 
+    /** Per-scenario live metrics (attackRate, failedLogins, targetUsers, sourceIps, …). */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "metrics")
+    private Map<String, Object> metrics = new LinkedHashMap<>();
+
     @Column(name = "run_by", length = 128)
     private String runBy;
 
@@ -210,6 +215,14 @@ public class SimulationRun extends Auditable {
 
     public void setErrors(List<String> errors) {
         this.errors = errors;
+    }
+
+    public Map<String, Object> getMetrics() {
+        return metrics;
+    }
+
+    public void setMetrics(Map<String, Object> metrics) {
+        this.metrics = metrics;
     }
 
     public String getRunBy() {

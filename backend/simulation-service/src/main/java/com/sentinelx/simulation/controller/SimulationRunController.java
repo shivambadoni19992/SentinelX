@@ -6,6 +6,7 @@ import java.util.UUID;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -14,6 +15,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import com.sentinelx.simulation.dto.SimulationRunDto;
 import com.sentinelx.simulation.service.SimulationService;
@@ -51,10 +53,16 @@ public class SimulationRunController {
         return service.all();
     }
 
-    @GetMapping("/{id}")
+        @GetMapping("/{id}")
     public ResponseEntity<SimulationRunDto> byId(@PathVariable UUID id) {
         SimulationRunDto run = service.byId(id);
         return run == null ? ResponseEntity.notFound().build() : ResponseEntity.ok(run);
+    }
+
+    /** Server-Sent Events stream of live progress for a run. */
+    @GetMapping(value = "/{id}/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter stream(@PathVariable UUID id) {
+        return service.stream(id);
     }
 
     @PostMapping("/{id}/cancel")

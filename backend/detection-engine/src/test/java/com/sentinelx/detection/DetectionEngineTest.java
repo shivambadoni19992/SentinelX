@@ -15,22 +15,26 @@ import com.sentinelx.detection.model.DetectionResult;
 import com.sentinelx.detection.model.Severity;
 import com.sentinelx.detection.model.WindowStore;
 import com.sentinelx.detection.rule.DetectionRule;
+import com.sentinelx.detection.rule.auth.AccountTakeoverSuspectedRule;
 import com.sentinelx.detection.rule.auth.FailedLoginSpikeRule;
 import com.sentinelx.detection.rule.auth.NewDeviceRule;
 import com.sentinelx.detection.rule.auth.NewIpRule;
+import com.sentinelx.detection.rule.api.ApiAbuseDetectedRule;
 import com.sentinelx.detection.rule.api.ApiRequestSpikeRule;
 import com.sentinelx.detection.rule.api.BotActivityRule;
 import com.sentinelx.detection.rule.audit.PrivilegedAccessAnomalyRule;
 import com.sentinelx.detection.rule.audit.UnauthorizedDataAccessRule;
 import com.sentinelx.detection.rule.network.ConnectionSpikeRule;
+import com.sentinelx.detection.rule.network.FailedConnectionsRule;
 import com.sentinelx.detection.rule.network.PortScanRule;
 import com.sentinelx.detection.rule.network.SuspiciousOutboundRule;
 import com.sentinelx.detection.rule.payment.MultipleFailedPaymentsRule;
+import com.sentinelx.detection.rule.payment.PaymentFraudSuspectedRule;
 import com.sentinelx.detection.rule.payment.TransactionVelocityRule;
 import com.sentinelx.detection.rule.payment.UnusualTransactionAmountRule;
 
 /**
- * Verifies the composable wiring of the engine: all 13 rules are discovered,
+ * Verifies the composable wiring of the engine: all 15 rules are discovered,
  * topic applicability is respected, multiple rules can fire on one event with
  * their contributions aggregated, and a failing rule is isolated.
  */
@@ -50,22 +54,28 @@ class DetectionEngineTest {
     private List<DetectionRule> allRules() {
         return List.of(
                 new FailedLoginSpikeRule(), new NewDeviceRule(), new NewIpRule(),
+                new AccountTakeoverSuspectedRule(),
                 new UnusualTransactionAmountRule(), new TransactionVelocityRule(),
+                new PaymentFraudSuspectedRule(),
                 new MultipleFailedPaymentsRule(),
-                new ApiRequestSpikeRule(), new BotActivityRule(),
-                new PortScanRule(), new ConnectionSpikeRule(), new SuspiciousOutboundRule(),
+                new ApiRequestSpikeRule(), new ApiAbuseDetectedRule(), new BotActivityRule(),
+                new PortScanRule(), new ConnectionSpikeRule(), new FailedConnectionsRule(),
+                new SuspiciousOutboundRule(),
                 new UnauthorizedDataAccessRule(), new PrivilegedAccessAnomalyRule());
     }
 
     @Test
-    void composesAllThirteenRules() {
+    void composesAllSeventeenRules() {
         DetectionEngine engine = new DetectionEngine(allRules());
-        assertThat(engine.rules()).hasSize(13);
+        assertThat(engine.rules()).hasSize(17);
         assertThat(engine.rules().stream().map(DetectionRule::id)).containsExactlyInAnyOrder(
                 "FAILED_LOGIN_SPIKE", "NEW_DEVICE", "NEW_IP",
-                "UNUSUAL_TRANSACTION_AMOUNT", "TRANSACTION_VELOCITY", "MULTIPLE_FAILED_PAYMENTS",
-                "API_REQUEST_SPIKE", "BOT_ACTIVITY",
-                "PORT_SCAN", "CONNECTION_SPIKE", "SUSPICIOUS_OUTBOUND",
+                "ACCOUNT_TAKEOVER_SUSPECTED",
+                "UNUSUAL_TRANSACTION_AMOUNT", "TRANSACTION_VELOCITY",
+                "PAYMENT_FRAUD_SUSPECTED",
+                "MULTIPLE_FAILED_PAYMENTS",
+                "API_REQUEST_SPIKE", "API_ABUSE_DETECTED", "BOT_ACTIVITY",
+                "PORT_SCAN", "CONNECTION_SPIKE", "FAILED_CONNECTIONS", "SUSPICIOUS_OUTBOUND",
                 "UNAUTHORIZED_DATA_ACCESS", "PRIVILEGED_ACCESS_ANOMALY");
     }
 

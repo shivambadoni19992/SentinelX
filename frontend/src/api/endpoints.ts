@@ -3,6 +3,7 @@
 // hook layer can decide between live resolution and demo fallback.
 
 import { apiFetch } from './client';
+import { getToken } from '../auth';
 import type {
   AuditLog,
   Cart,
@@ -12,7 +13,8 @@ import type {
   RiskDecision,
   SecurityAlert,
   SecurityEvent,
-  ServiceHealth,
+    ServiceHealth,
+  SimulationProgress,
   SimulationRun,
   User,
 } from './types';
@@ -117,6 +119,27 @@ export interface NewSimulation {
 export function createSimulation(body: NewSimulation): Promise<SimulationRun> {
   return apiFetch<SimulationRun>('/api/simulations', {
     method: 'POST',
-    body: JSON.stringify(body),
+        body: JSON.stringify(body),
   });
 }
+
+/** POST /api/simulations/{id}/cancel — request cancellation of a live run. */
+export function cancelSimulation(id: string): Promise<SimulationRun> {
+  return apiFetch<SimulationRun>(`/api/simulations/${encodeURIComponent(id)}/cancel`, {
+    method: 'POST',
+  });
+}
+
+/**
+ * Opens a real-time progress stream (SSE) for a run. `EventSource` cannot carry
+ * authorization headers, so the bearer token is passed as a query parameter for
+ * the gateway to forward. The caller is responsible for `.close()`.
+ */
+export function streamSimulation(id: string): EventSource {
+  const token = getToken();
+  const url = `/api/simulations/${encodeURIComponent(id)}/stream` +
+    (token ? `?token=${encodeURIComponent(token)}` : '');
+  return new EventSource(url);
+}
+
+export type { SimulationProgress };

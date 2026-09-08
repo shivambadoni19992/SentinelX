@@ -3,7 +3,7 @@ package com.sentinelx.risk.model;
 import java.util.Set;
 
 /**
- * The ten risk signals the engine scores. Each signal carries a weight
+ * The risk signals the engine scores. Each signal carries a weight
  * (points added per contributing detection, capped at {@code cap}), the
  * detection rule ids that raise it, and a human-readable label so every
  * computed score can be explained line by line.
@@ -13,12 +13,17 @@ public enum RiskSignal {
     FAILED_LOGINS("failed logins", 20, Set.of("FAILED_LOGIN_SPIKE")),
     NEW_DEVICE("new device", 15, Set.of("NEW_DEVICE")),
     NEW_IP("new IP", 10, Set.of("NEW_IP")),
+    SUSPICIOUS_IP("suspicious IP", 25, Set.of("SUSPICIOUS_IP")),
+    ACCOUNT_TAKEOVER("account takeover", 35, Set.of("ACCOUNT_TAKEOVER_SUSPECTED")),
     TRANSACTION_AMOUNT("transaction amount", 25, Set.of("UNUSUAL_TRANSACTION_AMOUNT")),
-    TRANSACTION_VELOCITY("transaction velocity", 20, Set.of("TRANSACTION_VELOCITY")),
+    TRANSACTION_VELOCITY("transaction velocity", 35, Set.of("TRANSACTION_VELOCITY")),
+    PAYMENT_FRAUD("payment fraud", 40, Set.of("PAYMENT_FRAUD_SUSPECTED")),
     FAILED_PAYMENTS("failed payments", 20, Set.of("MULTIPLE_FAILED_PAYMENTS")),
     API_RATE("API rate", 15, Set.of("API_REQUEST_SPIKE")),
+    API_ABUSE("API abuse", 25, Set.of("API_ABUSE_DETECTED")),
     BOT_ACTIVITY("bot activity", 20, Set.of("BOT_ACTIVITY")),
     NETWORK_ANOMALY("network anomaly", 25, Set.of("PORT_SCAN", "CONNECTION_SPIKE", "SUSPICIOUS_OUTBOUND")),
+    FAILED_CONNECTIONS("failed connections", 20, Set.of("FAILED_CONNECTIONS")),
     DATA_ACCESS_ANOMALY("data access anomaly", 30, Set.of("UNAUTHORIZED_DATA_ACCESS", "PRIVILEGED_ACCESS_ANOMALY"));
 
     /** How many times one signal may stack before it stops adding points. */

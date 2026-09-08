@@ -18,6 +18,8 @@ export const NAV_ITEMS: NavItem[] = [
   { id: 'audit-logs', label: 'Audit Logs', icon: '≡', group: 'platform' },
   { id: 'simulation-center', label: 'Simulation Center', icon: '▶', group: 'platform' },
   { id: 'simulation-history', label: 'Simulation History', icon: '◷', group: 'platform' },
+  { id: 'metrics', label: 'Metrics', icon: '📊', group: 'platform' },
+  { id: 'grafana-dashboards', label: 'Grafana', icon: '📈', group: 'platform' },
   { id: 'system-health', label: 'System Health', icon: '✚', group: 'platform' },
 ];
 
@@ -32,5 +34,7 @@ export const PAGE_TITLES: Record<string, { title: string; subtitle: string }> = 
   'audit-logs': { title: 'Audit Logs', subtitle: 'Immutable trail of platform actions' },
   'simulation-center': { title: 'Simulation Center', subtitle: 'Launch controlled security scenarios' },
   'simulation-history': { title: 'Simulation History', subtitle: 'Past runs and outcomes' },
+  metrics: { title: 'Prometheus Metrics', subtitle: 'Real-time system metrics and monitoring' },
+  'grafana-dashboards': { title: 'Grafana Dashboards', subtitle: 'Metrics visualization and alerting' },
   'system-health': { title: 'System Health', subtitle: 'Microservice availability and uptime' },
 };

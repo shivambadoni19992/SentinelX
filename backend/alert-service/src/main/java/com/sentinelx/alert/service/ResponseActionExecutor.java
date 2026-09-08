@@ -156,11 +156,13 @@ public class ResponseActionExecutor {
     }
 
     private static String subjectOf(SecurityAlert alert) {
-        if (alert.getEntityId() != null) {
-            return alert.getEntityId().toString();
-        }
+        // Auto-created alerts bind the acting user (username) to assignedTo so
+        // RATE_LIMIT / verification / monitor keys target the real subject.
         if (alert.getAssignedTo() != null && !alert.getAssignedTo().isBlank()) {
             return alert.getAssignedTo();
+        }
+        if (alert.getEntityId() != null) {
+            return alert.getEntityId().toString();
         }
         return "alert:" + alert.getId();
     }

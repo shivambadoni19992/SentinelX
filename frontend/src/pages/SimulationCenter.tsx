@@ -1,13 +1,17 @@
-import { useEffect, useMemo, useState } from 'react';
-import { createSimulation, listSimulations } from '../api/endpoints';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { cancelSimulation, createSimulation, listSimulations, streamSimulation } from '../api/endpoints';
+import type { SimulationProgress } from '../api/types';
 import { useCollection } from '../hooks/useCollection';
-import { mockSimulations } from '../api/mock';
+import { mockSimulations, mockStreamSimulation } from '../api/mock';
 import type { SimulationRun } from '../api/types';
 import { Card, StatCard } from '../components/ui/Card';
 import { DataTable, type Column } from '../components/ui/DataTable';
 import { StatusBadge } from '../components/ui/Badge';
 import { DemoBanner, ErrorState } from '../components/ui/StateViews';
 import { relativeTime } from '../lib/format';
+import { LineChart, ChartLegend } from '../components/charts/LineChart';
+import { metrics } from '../lib/metrics';
+import { createContext, getDuration } from '../lib/correlation';
 
 // ------------------------------------------------------------------ catalog
 
@@ -19,7 +23,7 @@ interface SimTypeMeta {
   sections: SimSection[];
 }
 
-type SimSection = 'payment' | 'auth' | 'api' | 'network';
+type SimSection = 'payment' | 'auth' | 'api' | 'network' | 'velocity' | 'bot';
 
 const SIM_TYPES: SimTypeMeta[] = [
   { value: 'NORMAL_TRAFFIC', label: 'Normal Traffic', desc: 'Benign baseline — should raise no detections.', sections: [] },
@@ -29,10 +33,10 @@ const SIM_TYPES: SimTypeMeta[] = [
   { value: 'SUSPICIOUS_LOGIN', label: 'Suspicious Login', desc: 'Logins from unusual geos and hours.', sections: ['auth'] },
   { value: 'NEW_DEVICE', label: 'New Device', desc: 'First-seen device fingerprints.', sections: ['auth'] },
   { value: 'PAYMENT_FRAUD', label: 'Payment Fraud', desc: 'High-risk authorizations and holds.', sections: ['payment'] },
-  { value: 'TRANSACTION_VELOCITY', label: 'Transaction Velocity', desc: 'Rapid-fire transactions per user.', sections: ['payment'] },
+  { value: 'TRANSACTION_VELOCITY', label: 'Transaction Velocity', desc: 'Rapid-fire transactions per user.', sections: ['velocity'] },
   { value: 'FAILED_PAYMENTS', label: 'Failed Payments', desc: 'Bursts of declined authorizations.', sections: ['payment'] },
   { value: 'API_ABUSE', label: 'API Abuse', desc: '4xx/429-heavy abusive request patterns.', sections: ['api'] },
-  { value: 'BOT_ACTIVITY', label: 'Bot Activity', desc: 'High-volume uniform non-human traffic.', sections: ['api'] },
+  { value: 'BOT_ACTIVITY', label: 'Bot Activity', desc: 'Bot fleet mixed with legitimate traffic.', sections: ['bot'] },
   { value: 'SUSPICIOUS_IP', label: 'Suspicious IP', desc: 'Traffic from anonymizer / bad-reputation IPs.', sections: ['api'] },
   { value: 'UNAUTHORIZED_DATA_ACCESS', label: 'Unauthorized Data Access', desc: 'Denied access to protected data endpoints.', sections: ['api'] },
   { value: 'PRIVILEGED_ACCESS_ANOMALY', label: 'Privileged Access Anomaly', desc: 'Admin actions outside expected patterns.', sections: ['api'] },
@@ -41,7 +45,8 @@ const SIM_TYPES: SimTypeMeta[] = [
   { value: 'COUPON_ABUSE', label: 'Coupon Abuse', desc: 'Repeated coupon redemption across accounts.', sections: [] },
   { value: 'PORT_SCAN', label: 'Port Scan', desc: 'Sequential probes across many ports.', sections: ['network'] },
   { value: 'CONNECTION_SPIKE', label: 'Connection Spike', desc: 'Sudden connection-count surges.', sections: ['network'] },
-  { value: 'SUSPICIOUS_OUTBOUND', label: 'Suspicious Outbound', desc: 'Large outbound transfers to odd hosts.', sections: ['network'] },
+  { value: 'FAILED_CONNECTIONS', label: 'Failed Connections', desc: 'High rate of unreachable-host attempts.', sections: ['network'] },
+  { value: 'SUSPICIOUS_OUTBOUND', label: 'Suspicious Outbound', desc: 'Large transfers — compose-internal only.', sections: ['network'] },
 ];
 
 const SECTION_TITLES: Record<SimSection, string> = {
@@ -49,6 +54,8 @@ const SECTION_TITLES: Record<SimSection, string> = {
   auth: 'Authentication Parameters',
   api: 'API Parameters',
   network: 'Network Parameters',
+  velocity: 'Velocity Parameters',
+  bot: 'Bot Parameters',
 };
 
 // ------------------------------------------------------- field definitions
@@ -87,22 +94,34 @@ const COMMON_FIELDS: FieldDef[] = [
 ];
 
 const PAYMENT_FIELDS: FieldDef[] = [
-  { key: 'transactionsPerSecond', label: 'Transactions', kind: 'number', min: 1, max: 500, step: 1, def: 20, unit: 'txn/s' },
+  { key: 'transactions', label: 'Transactions', kind: 'number', min: 100, max: 50_000, step: 100, def: 10_000, unit: 'total' },
   { key: 'normalAmount', label: 'Normal Amount', kind: 'number', min: 1, max: 5_000, step: 1, def: 80, unit: 'USD' },
   { key: 'suspiciousAmount', label: 'Suspicious Amount', kind: 'number', min: 1, max: 25_000, step: 10, def: 1_200, unit: 'USD' },
-  { key: 'highValueAmount', label: 'High-Value Amount', kind: 'number', min: 1, max: 100_000, step: 100, def: 9_500, unit: 'USD' },
-  { key: 'velocity', label: 'Velocity', kind: 'number', min: 1, max: 100, step: 1, def: 10, unit: 'txn/user' },
+  { key: 'highValueAmount', label: 'High-Value Amount', kind: 'number', min: 1, max: 100_000, step: 100, def: 100_000, unit: 'USD' },
+  { key: 'velocity', label: 'Velocity', kind: 'number', min: 1, max: 100, step: 1, def: 10, unit: 'cards' },
   { key: 'failedPaymentPercentage', label: 'Failed Payment %', kind: 'percent', min: 0, max: 100, step: 1, def: 35, unit: '%' },
   { key: 'newDevicePercentage', label: 'New Device %', kind: 'percent', min: 0, max: 100, step: 1, def: 30, unit: '%' },
   { key: 'suspiciousIpPercentage', label: 'Suspicious IP %', kind: 'percent', min: 0, max: 100, step: 1, def: 40, unit: '%' },
 ];
 
+const VELOCITY_FIELDS: FieldDef[] = [
+  { key: 'users', label: 'Users', kind: 'number', min: 10, max: 10_000, step: 10, def: 1_000, unit: 'users' },
+  { key: 'transactionsPerUser', label: 'Transactions / User', kind: 'number', min: 1, max: 200, step: 1, def: 20, unit: 'txn' },
+  { key: 'timeWindowSeconds', label: 'Time Window', kind: 'number', min: 1, max: 300, step: 1, def: 60, unit: 'sec' },
+  { key: 'amount', label: 'Amount', kind: 'number', min: 1, max: 50_000, step: 10, def: 500, unit: 'USD' },
+  { key: 'concurrentUsers', label: 'Concurrent Users', kind: 'number', min: 1, max: 500, step: 1, def: 5, unit: 'users' },
+  { key: 'attackPercentage', label: 'Attack %', kind: 'percent', min: 0, max: 100, step: 1, def: 25, unit: '%' },
+];
+
 const AUTH_FIELDS: FieldDef[] = [
   { key: 'targetUsers', label: 'Target Users', kind: 'number', min: 1, max: 1_000, step: 1, def: 5, unit: 'accounts' },
-  { key: 'failedAttemptsPerUser', label: 'Failed Attempts / User', kind: 'number', min: 1, max: 1_000, step: 1, def: 50, unit: 'attempts' },
-  { key: 'attemptsPerSecond', label: 'Attempts / sec', kind: 'number', min: 1, max: LIMITS.maxEps, step: 1, def: 25, unit: 'att/s' },
+  { key: 'failedAttemptsPerUser', label: 'Failed Attempts / User', kind: 'number', min: 1, max: 1_000, step: 1, def: 10, unit: 'attempts' },
+  { key: 'attemptsPerSecond', label: 'Attempts / sec', kind: 'number', min: 1, max: LIMITS.maxEps, step: 1, def: 15, unit: 'att/s' },
   { key: 'authSourceIps', label: 'IPs', kind: 'number', min: 1, max: LIMITS.maxIps, step: 1, def: 12, unit: 'IPs' },
   { key: 'authDevices', label: 'Devices', kind: 'number', min: 1, max: LIMITS.maxDevices, step: 1, def: 8, unit: 'devices' },
+  { key: 'newIpPercentage', label: 'New IP %', kind: 'percent', min: 0, max: 100, step: 1, def: 80, unit: '%' },
+  { key: 'newDevicePercentage', label: 'New Device %', kind: 'percent', min: 0, max: 100, step: 1, def: 80, unit: '%' },
+  { key: 'successfulLoginPercentage', label: 'Successful Login %', kind: 'percent', min: 0, max: 100, step: 1, def: 90, unit: '%' },
 ];
 
 const API_FIELDS: FieldDef[] = [
@@ -122,18 +141,53 @@ const API_FIELDS: FieldDef[] = [
       { value: '/api/risk/decisions', label: '/api/risk/decisions' },
     ],
   },
-  { key: 'normalRps', label: 'Normal RPS', kind: 'number', min: 1, max: 500, step: 1, def: 10, unit: 'req/s' },
-  { key: 'attackRps', label: 'Attack RPS', kind: 'number', min: 1, max: LIMITS.maxEps, step: 1, def: 80, unit: 'req/s' },
+  { key: 'normalRps', label: 'Normal RPS', kind: 'number', min: 1, max: 1_000, step: 1, def: 100, unit: 'req/s' },
+  { key: 'attackRps', label: 'Attack RPS', kind: 'number', min: 1, max: LIMITS.maxEps, step: 1, def: 5_000, unit: 'req/s' },
   { key: 'apiDurationSeconds', label: 'Duration', kind: 'number', min: 1, max: LIMITS.maxDuration, step: 1, def: 60, unit: 'sec' },
 ];
 
 const NETWORK_FIELDS: FieldDef[] = [
-  { key: 'networkSources', label: 'Sources', kind: 'number', min: 1, max: 1_000, step: 1, def: 8, unit: 'hosts' },
-  { key: 'networkTargets', label: 'Targets', kind: 'number', min: 1, max: 254, step: 1, def: 12, unit: 'hosts' },
-  { key: 'networkPorts', label: 'Ports', kind: 'number', min: 1, max: 1_000, step: 1, def: 50, unit: 'ports' },
-  { key: 'networkAttempts', label: 'Attempts', kind: 'number', min: 1, max: LIMITS.maxTotalEvents, step: 1, def: 500, unit: 'total' },
+  {
+    key: 'sourceContainers',
+    label: 'Source Containers',
+    kind: 'text',
+    def: 'api-gateway, auth-service',
+    hint: 'Comma-separated compose service names',
+  },
+  {
+    key: 'targetContainers',
+    label: 'Target Containers',
+    kind: 'text',
+    def: 'postgres, redis, detection-engine',
+    hint: 'Compose services only — external targets are rejected',
+  },
+  {
+    key: 'ports',
+    label: 'Ports',
+    kind: 'text',
+    def: '5432, 6379, 9092',
+    hint: 'Comma-separated ports; a single number sweeps 1..N (port scans)',
+  },
+  { key: 'attempts', label: 'Attempts', kind: 'number', min: 1, max: LIMITS.maxTotalEvents, step: 1, def: 500, unit: 'total' },
   { key: 'connectionsPerSecond', label: 'Connections / sec', kind: 'number', min: 1, max: LIMITS.maxEps, step: 1, def: 30, unit: 'conn/s' },
   { key: 'networkDurationSeconds', label: 'Duration', kind: 'number', min: 1, max: LIMITS.maxDuration, step: 1, def: 60, unit: 'sec' },
+];
+
+const BOT_FIELDS: FieldDef[] = [
+  { key: 'botCount', label: 'Number of Bots', kind: 'number', min: 1, max: 1_000, step: 1, def: 50, unit: 'bots' },
+  { key: 'requestsPerBot', label: 'Requests / Bot', kind: 'number', min: 1, max: 10_000, step: 10, def: 200, unit: 'req' },
+  { key: 'rpsPerBot', label: 'RPS / Bot', kind: 'number', min: 1, max: 100, step: 1, def: 20, unit: 'req/s' },
+  {
+    key: 'targetEndpoints',
+    label: 'Target Endpoints',
+    kind: 'text',
+    def: '/api/products, /api/search',
+    hint: 'Comma-separated endpoint paths the bot fleet hits',
+  },
+  { key: 'sessionDurationSeconds', label: 'Session Duration', kind: 'number', min: 1, max: LIMITS.maxDuration, step: 1, def: 45, unit: 'sec' },
+  { key: 'botUserAgentPattern', label: 'User-Agent Pattern', kind: 'text', def: 'SimBot/$VERSION', hint: 'Bot user-agent; $VERSION is auto-incremented' },
+  { key: 'botDurationSeconds', label: 'Attack Duration', kind: 'number', min: 1, max: LIMITS.maxDuration, step: 1, def: 60, unit: 'sec' },
+  { key: 'attackPercentage', label: 'Bot %', kind: 'percent', min: 0, max: 100, step: 1, def: 60, unit: '%' },
 ];
 
 const SECTION_FIELDS: Record<SimSection, FieldDef[]> = {
@@ -141,6 +195,8 @@ const SECTION_FIELDS: Record<SimSection, FieldDef[]> = {
   auth: AUTH_FIELDS,
   api: API_FIELDS,
   network: NETWORK_FIELDS,
+  velocity: VELOCITY_FIELDS,
+  bot: BOT_FIELDS,
 };
 
 const VECTOR_LABELS: Record<SimSection, string> = {
@@ -148,17 +204,50 @@ const VECTOR_LABELS: Record<SimSection, string> = {
   auth: 'Include authentication vector',
   api: 'Include API vector',
   network: 'Include network vector',
+  velocity: 'Include velocity vector',
+  bot: 'Include bot vector',
 };
+
+/** The four network-drill scenario types that render the network dashboard. */
+const NETWORK_SIM_TYPES = ['PORT_SCAN', 'CONNECTION_SPIKE', 'FAILED_CONNECTIONS', 'SUSPICIOUS_OUTBOUND'];
 
 // ------------------------------------------------------------- value state
 
-type ParamValues = Record<string, number | string | boolean>;
+type ParamValues = Record<string, number | string | boolean | string[]>;
+
+/** One aggregated network flow row rendered on the network drill dashboard. */
+interface NetworkFlow {
+  source: string;
+  destination: string;
+  port: string;
+  protocol: string;
+  rate: number;
+  risk: number;
+  severity: string;
+  count: number;
+}
 
 function defaultsFor(sections: SimSection[]): ParamValues {
   const values: ParamValues = {};
   COMMON_FIELDS.forEach((f) => (values[f.key] = f.def));
   sections.forEach((s) => SECTION_FIELDS[s].forEach((f) => (values[f.key] = f.def)));
   return values;
+}
+
+/** Builds a time-series array for the RPS chart: baseline is steady, attack spikes. */
+function buildRpsSeries(rate: number, points: number, attack: boolean): number[] {
+  const out: number[] = [];
+  for (let i = 0; i < points; i += 1) {
+    if (attack) {
+      // Attack phase: spike in the middle of the window.
+      const spike = i > points * 0.3 && i < points * 0.8 ? 1.0 : 0.1;
+      out.push(Math.max(0, Math.round(rate * spike * (0.8 + Math.sin(i / 3) * 0.2))));
+    } else {
+      // Baseline: gentle fluctuation around the configured rate.
+      out.push(Math.max(0, Math.round(rate * (0.7 + Math.sin(i / 4) * 0.3))));
+    }
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------- widgets
@@ -239,6 +328,8 @@ export function SimulationCenter({ user }: { user?: { username: string } }) {
     auth: true,
     api: true,
     network: true,
+    velocity: true,
+    bot: true,
   });
   const [name, setName] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -311,7 +402,7 @@ export function SimulationCenter({ user }: { user?: { username: string } }) {
     const usesApi = activeSections.includes('api');
     const usesNetwork = activeSections.includes('network');
     const transactions = usesPayment
-      ? (Number(values.transactionsPerSecond) || 0) * duration
+      ? (Number(values.transactions) || 0)
       : 0;
     const requests = usesApi
       ? ((Number(values.normalRps) || 0) + (Number(values.attackRps) || 0)) * (Number(values.apiDurationSeconds) || duration)
@@ -330,6 +421,14 @@ export function SimulationCenter({ user }: { user?: { username: string } }) {
 
   // ---------------------------------------------------------- live metrics
 
+    // ---------------------------------------------------------- SSE streaming
+  // Live progress (counters + time-series) streamed from the backend over SSE,
+  // with a synthetic fallback feed when the endpoint is unreachable.
+  const [stream, setStream] = useState<SimulationProgress | null>(null);
+  const [streaming, setStreaming] = useState(false);
+  const esRef = useRef<EventSource | null>(null);
+  const mockRef = useRef<{ cancel: () => void } | null>(null);
+
   const liveRun = useMemo(() => {
     const active = list.data.find(
       (s) => s.status === 'RUNNING' || s.status === 'QUEUED' || s.status === 'PENDING',
@@ -340,16 +439,58 @@ export function SimulationCenter({ user }: { user?: { username: string } }) {
 
   const live = useMemo(() => {
     if (!liveRun) {
-      return { present: false as const, users: 0, transactions: 0, requests: 0, events: 0, eps: 0, errors: 0 };
+      return {
+        present: false as const,
+        users: 0,
+        transactions: 0,
+        requests: 0,
+        events: 0,
+        eps: 0,
+        errors: 0,
+        bf: { attackRate: 0, failedLogins: 0, successfulLogins: 0, targetUsers: 0, sourceIps: 0, risk: 0, alerts: 0, actions: 0 },
+        ato: { failedLogins: 0, newIpLogins: 0, newDeviceLogins: 0, successfulLogins: 0, suspiciousPayments: 0, targetUsers: 0, risk: 0, alerts: 0, actions: 0 },
+        pf: { totalPayments: 0, highValuePayments: 0, declinedPayments: 0, newDevicePayments: 0, suspiciousIpPayments: 0, fraudRingCards: 0, risk: 0, alerts: 0, actions: 0 },
+        tv: { totalPayments: 0, baselinePayments: 0, burstPayments: 0, affectedUsers: 0, heldPayments: 0, baselineRate: 0, attackVelocity: 0, risk: 0, alerts: 0, actions: 0 },
+        api: { totalRequests: 0, baselineRequests: 0, attackRequests: 0, blockedRequests: 0, currentRps: 0, baselineRps: 0, attackRps: 0, topIps: 0, topEndpoints: 0, risk: 0, alerts: 0, actions: 0 },
+        bot: { legits: 0, bots: 0, totalRequests: 0, legitimatePct: 0, botPct: 0, botIps: 0, endpoints: 0, risk: 0, actions: 0, alerts: 0 },
+        network: { totalEvents: 0, currentRate: 0, connectionsPerSecond: 0, distinctSources: 0, distinctDestinations: 0, distinctPorts: 0, risk: 0, actions: 0, alerts: 0, flows: [] },
+        mixed: {
+          campaignId: '',
+          attackVectors: [],
+          authEvents: 0,
+          apiEvents: 0,
+          paymentEvents: 0,
+          networkEvents: 0,
+          dataAccessEvents: 0,
+          totalAttackEvents: 0,
+          detections: 0,
+          risk: 0,
+          alerts: 0,
+          actions: 0,
+          attackIntensity: 0,
+          affectedUsers: 0,
+        },
+        eventsPerSecond: [],
+        alertsOverTime: [],
+        riskDistribution: { HIGH: 0, MEDIUM: 0, LOW: 0 },
+        progress: 0,
+        isStreaming: false,
+        streamStatus: null,
+      };
     }
     const cfg = (liveRun.configuration ?? liveRun.config ?? {}) as Record<string, unknown>;
-    const num = (k: string, fb = 0) => {
-      const v = cfg[k];
+    const metrics = liveRun.metrics ?? {};
+    const num = (k: string, fb = 0, src: Record<string, unknown> = cfg) => {
+      const v = src[k];
       return typeof v === 'number' && Number.isFinite(v) ? v : fb;
     };
     const duration = num('durationSeconds', 60);
-    const eps = num('eventsPerSecond', 0);
-    const transactions = num('transactionsPerSecond', 0) * duration;
+        const eps = num('eventsPerSecond', 0);
+    const liveEps = stream?.eventsPerSec ?? eps;
+    const liveErrors = stream
+      ? stream.errors.length
+      : (Array.isArray(liveRun.errors) ? liveRun.errors.length : 0);
+    const transactions = num('transactions', 0);
     const apiRps = num('normalRps', 0) + num('attackRps', 0);
     const requests = apiRps > 0
       ? apiRps * num('apiDurationSeconds', duration)
@@ -359,9 +500,117 @@ export function SimulationCenter({ user }: { user?: { username: string } }) {
       users: num('numberOfUsers'),
       transactions,
       requests: requests > 0 ? requests : Number(liveRun.eventsGenerated ?? 0),
-      events: Number(liveRun.eventsGenerated ?? 0),
-      eps,
-      errors: Array.isArray(liveRun.errors) ? liveRun.errors.length : 0,
+            events: Number(liveRun.eventsGenerated ?? 0),
+      eps: liveEps,
+      errors: liveErrors,
+      // Brute-force drill metrics (persisted live by the simulation runner).
+      bf: {
+        attackRate: num('attackRate', 0, metrics),
+        failedLogins: num('failedLogins', 0, metrics),
+        successfulLogins: num('successfulLogins', 0, metrics),
+        targetUsers: num('targetUsers', 0, metrics),
+        sourceIps: num('sourceIps', 0, metrics),
+        risk: Number(liveRun.riskDecisions ?? 0),
+        alerts: Number(liveRun.alerts ?? 0),
+        actions: Number(liveRun.actions ?? 0),
+      },
+      // Account-takeover attack-chain metrics (persisted live by the simulation runner).
+      ato: {
+        failedLogins: num('failedLogins', 0, metrics),
+        newIpLogins: num('newIpLogins', 0, metrics),
+        newDeviceLogins: num('newDeviceLogins', 0, metrics),
+        successfulLogins: num('successfulLogins', 0, metrics),
+        suspiciousPayments: num('suspiciousPayments', 0, metrics),
+        targetUsers: num('targetUsers', 0, metrics),
+        risk: Number(liveRun.riskDecisions ?? 0),
+        alerts: Number(liveRun.alerts ?? 0),
+        actions: Number(liveRun.actions ?? 0),
+      },
+      // Payment-fraud metrics (persisted live by the simulation runner).
+      pf: {
+        totalPayments: num('totalPayments', 0, metrics),
+        highValuePayments: num('highValuePayments', 0, metrics),
+        declinedPayments: num('declinedPayments', 0, metrics),
+        newDevicePayments: num('newDevicePayments', 0, metrics),
+        suspiciousIpPayments: num('suspiciousIpPayments', 0, metrics),
+        fraudRingCards: num('fraudRingCards', 0, metrics),
+        risk: Number(liveRun.riskDecisions ?? 0),
+        alerts: Number(liveRun.alerts ?? 0),
+        actions: Number(liveRun.actions ?? 0),
+      },
+      // Transaction-velocity metrics (persisted live by the simulation runner).
+      tv: {
+        totalPayments: num('totalPayments', 0, metrics),
+        baselinePayments: num('baselinePayments', 0, metrics),
+        burstPayments: num('burstPayments', 0, metrics),
+        affectedUsers: num('affectedUsers', 0, metrics),
+        heldPayments: num('heldPayments', 0, metrics),
+        baselineRate: num('baselineRate', 0, metrics),
+        attackVelocity: num('attackVelocity', 0, metrics),
+        risk: Number(liveRun.riskDecisions ?? 0),
+        alerts: Number(liveRun.alerts ?? 0),
+        actions: Number(liveRun.actions ?? 0),
+      },
+      // API-abuse metrics (persisted live by the simulation runner).
+      api: {
+        totalRequests: num('totalRequests', 0, metrics),
+        baselineRequests: num('baselineRequests', 0, metrics),
+        attackRequests: num('attackRequests', 0, metrics),
+        blockedRequests: num('blockedRequests', 0, metrics),
+        currentRps: num('currentRps', 0, metrics),
+        baselineRps: num('baselineRps', 0, metrics),
+        attackRps: num('attackRps', 0, metrics),
+        topIps: num('topIps', 0, metrics),
+        topEndpoints: num('topEndpoints', 0, metrics),
+        risk: num('risk', 0, metrics),
+        alerts: Number(liveRun.alerts ?? 0),
+        actions: Number(liveRun.actions ?? 0),
+      },
+      // Bot-activity metrics (persisted live by the simulation runner).
+      bot: {
+        legits: num('legitRequests', 0, metrics),
+        bots: num('botRequests', 0, metrics),
+        totalRequests: num('totalRequests', 0, metrics),
+        legitimatePct: num('legitimatePct', 100, metrics),
+        botPct: num('botPct', 0, metrics),
+        botIps: num('botIps', 0, metrics),
+        endpoints: num('endpoints', 0, metrics),
+        risk: num('risk', 0, metrics),
+        actions: num('actions', 0, metrics),
+        alerts: Number(liveRun.alerts ?? 0),
+      },
+      // Network-drill metrics (persisted live by the simulation runner).
+      network: {
+        totalEvents: num('totalEvents', 0, metrics),
+        currentRate: num('currentRate', 0, metrics),
+        connectionsPerSecond: num('connectionsPerSecond', 0, metrics),
+        distinctSources: num('distinctSources', 0, metrics),
+        distinctDestinations: num('distinctDestinations', 0, metrics),
+        distinctPorts: num('distinctPorts', 0, metrics),
+        risk: num('risk', 0, metrics),
+        actions: num('actions', 0, metrics),
+        alerts: Number(liveRun.alerts ?? 0),
+        flows: Array.isArray(metrics?.flows) ? (metrics.flows as unknown as NetworkFlow[]) : [],
+      },
+      // Mixed-attack campaign metrics (aggregated from all active vectors).
+      mixed: {
+        campaignId: String(liveRun.campaignId ?? cfg.campaignId ?? ''),
+        attackVectors: Array.isArray(cfg.attackVectors)
+          ? (cfg.attackVectors as string[])
+          : (Object.keys(includeVectors) as SimSection[]).filter((s) => includeVectors[s] && (cfg[`include${s[0].toUpperCase()}${s.slice(1)}`] !== false)),
+        authEvents: num('authEvents', num('failedLogins', 0, metrics) + num('successfulLogins', 0, metrics) + num('newIpLogins', 0, metrics) + num('newDeviceLogins', 0, metrics), metrics),
+        apiEvents: num('apiEvents', num('totalRequests', 0, metrics) + num('attackRequests', 0, metrics) + num('blockedRequests', 0, metrics), metrics),
+        paymentEvents: num('paymentEvents', num('totalPayments', 0, metrics) + num('highValuePayments', 0, metrics) + num('declinedPayments', 0, metrics), metrics),
+        networkEvents: num('networkEvents', num('totalEvents', 0, metrics), metrics),
+        dataAccessEvents: num('dataAccessEvents', num('dataAccessAttempts', 0, metrics), metrics),
+        totalAttackEvents: num('totalAttackEvents', 0, metrics),
+        detections: Number(liveRun.detections ?? num('detections', 0, metrics)),
+        risk: Number(liveRun.riskDecisions ?? num('risk', 0, metrics)),
+        alerts: Number(liveRun.alerts ?? num('alerts', 0, metrics)),
+        actions: Number(liveRun.actions ?? num('actions', 0, metrics)),
+        attackIntensity: num('attackIntensity', num('attackPercent', 0), cfg),
+        affectedUsers: num('affectedUsers', num('targetUsers', 0, metrics), metrics),
+      },
     };
   }, [liveRun]);
 
@@ -375,9 +624,13 @@ export function SimulationCenter({ user }: { user?: { username: string } }) {
     setSubmitOk(null);
     const configuration: ParamValues = { ...values };
     if (typeValue === 'MIXED_ATTACK') {
+      const enabledVectors: string[] = [];
       (Object.keys(includeVectors) as SimSection[]).forEach((s) => {
         configuration[`include${s[0].toUpperCase()}${s.slice(1)}`] = includeVectors[s];
+        if (includeVectors[s]) enabledVectors.push(s);
       });
+      configuration.attackVectors = enabledVectors;
+      configuration.campaignId = `camp-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
     }
     try {
       const run = await createSimulation({
@@ -386,7 +639,8 @@ export function SimulationCenter({ user }: { user?: { username: string } }) {
         configuration,
         runBy: user?.username,
       });
-      setSubmitOk(`Simulation ${run.simulationId ?? ''} queued — the live pipeline is now processing it.`);
+      const campaignInfo = configuration.campaignId ? ` (Campaign: ${configuration.campaignId})` : '';
+      setSubmitOk(`Simulation ${run.simulationId ?? ''} queued${campaignInfo} — the live pipeline is now processing it.`);
       setName('');
       list.refetch();
     } catch (err) {
@@ -409,6 +663,139 @@ export function SimulationCenter({ user }: { user?: { username: string } }) {
     return () => clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeCount]);
+
+  // ---------------------------------------------------------- SSE streaming
+  // Connects to the real SSE endpoint when available, falling back to the
+  // synthetic mock stream. Cancellation propagates to both paths.
+  // Tracks Prometheus metrics during simulation execution.
+  useEffect(() => {
+    if (!liveRun) {
+      setStream(null);
+      setStreaming(false);
+      metrics.setActiveSimulations(0);
+      return;
+    }
+    const runId = liveRun.simulationId ?? liveRun.id ?? '';
+    if (!runId) return;
+
+    setStreaming(true);
+    metrics.setActiveSimulations(1);
+    const ctx = createContext(`simulation:${liveRun.type ?? liveRun.scenario}`);
+
+    // Track simulation start
+    metrics.trackSimulationEvent('start');
+    metrics.trackKafkaMessage('simulation-events', 'produced');
+
+    // Try the real SSE endpoint first.
+    let es: EventSource | null = null;
+    let mock: { cancel: () => void } | null = null;
+    let useMock = false;
+
+    const handleProgress = (data: SimulationProgress) => {
+      setStream(data);
+      // Track metrics from stream data
+      if (data.eventsPerSec > 0) {
+        metrics.trackSimulationEvent('event');
+        metrics.trackKafkaMessage('security-events', 'produced');
+      }
+      if (data.detections > 0) {
+        metrics.trackDetection('simulation-rule', 'HIGH');
+      }
+      if (data.riskDecisions > 0) {
+        metrics.trackRiskDecision('HIGH', 'MONITOR');
+      }
+      if (data.alerts > 0) {
+        metrics.trackAlert('HIGH');
+      }
+      if (data.actions > 0) {
+        metrics.trackBlockedUser();
+        metrics.trackHeldTransaction();
+      }
+      metrics.trackSimulationDuration(data.elapsed);
+    };
+
+    const handleDone = (data: SimulationProgress) => {
+      setStream(data);
+      setStreaming(false);
+      metrics.setActiveSimulations(0);
+      metrics.trackSimulationEvent('complete');
+      metrics.trackSimulationDuration(getDuration(ctx));
+      if (data.errors?.length) {
+        metrics.trackSimulationError('execution_error');
+      }
+      metrics.trackKafkaMessage('simulation-events', 'consumed');
+      list.refetch();
+    };
+
+    try {
+      es = streamSimulation(runId);
+      es.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data) as SimulationProgress;
+          handleProgress(data);
+          if (data.status === 'COMPLETED' || data.status === 'CANCELLED' || data.status === 'FAILED') {
+            es?.close();
+            handleDone(data);
+          }
+        } catch {
+          // Ignore malformed messages.
+        }
+      };
+      es.onerror = () => {
+        // Fall back to mock stream on SSE error.
+        es?.close();
+        if (useMock) return;
+        useMock = true;
+        metrics.trackKafkaError('simulation-events');
+        mock = mockStreamSimulation(liveRun, handleProgress, handleDone);
+        mockRef.current = mock;
+      };
+    } catch {
+      // SSE not supported — use mock stream.
+      useMock = true;
+      mock = mockStreamSimulation(liveRun, handleProgress, handleDone);
+      mockRef.current = mock;
+    }
+
+    esRef.current = es;
+
+    return () => {
+      if (es && !useMock) {
+        es.close();
+      }
+      if (mock) {
+        mock.cancel();
+      }
+      mockRef.current = null;
+      esRef.current = null;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [liveRun?.simulationId, liveRun?.id]);
+
+  // ---------------------------------------------------------- cancellation
+  const handleCancel = useCallback(async () => {
+    if (!liveRun) return;
+    const runId = liveRun.simulationId ?? liveRun.id ?? '';
+    // Stop the local stream immediately.
+    if (mockRef.current) {
+      mockRef.current.cancel();
+    }
+    if (esRef.current) {
+      esRef.current.close();
+    }
+    // Track cancellation metrics
+    metrics.trackSimulationEvent('cancelled');
+    metrics.trackSimulationError('user_cancellation');
+    metrics.setActiveSimulations(0);
+    // Notify the backend.
+    try {
+      await cancelSimulation(runId);
+    } catch {
+      // Backend may not be reachable — local cancellation already done.
+    }
+    setStreaming(false);
+    list.refetch();
+  }, [liveRun, list]);
 
   const columns: Column<SimulationRun>[] = [
     { key: 'name', header: 'Name', render: (s) => <strong>{s.name}</strong> },
@@ -590,34 +977,503 @@ export function SimulationCenter({ user }: { user?: { username: string } }) {
         className="live-pipeline"
       >
         {live.present ? (
-          <div className="live-grid">
-            <StatCard label="Users" value={live.users.toLocaleString()} tone="info" icon="◉" />
-            <StatCard
-              label="Transactions"
-              value={live.transactions ? live.transactions.toLocaleString() : '—'}
-              tone="violet"
-              icon="⇄"
-            />
-            <StatCard
-              label="Requests"
-              value={live.requests ? live.requests.toLocaleString() : '—'}
-              tone="info"
-              icon="⌗"
-            />
-            <StatCard label="Events" value={live.events.toLocaleString()} tone="warn" icon="◷" />
-            <StatCard label="Events / sec" value={live.eps ? live.eps.toLocaleString() : '—'} tone="good" icon="⚡" />
-            <StatCard
-              label="Errors"
-              value={live.errors}
-              tone={live.errors > 0 ? 'bad' : 'good'}
-              icon="✕"
-            />
-          </div>
+          <>
+            {/* Primary metrics grid */}
+            <div className="live-grid live-grid-primary">
+              <StatCard label="Simulation ID" value={<span className="mono">{liveRun?.simulationId ?? liveRun?.id ?? '—'}</span>} tone="info" icon="◈" />
+              <StatCard label="Status" value={stream?.status ?? liveRun?.status ?? '—'} tone={stream?.status === 'RUNNING' ? 'warn' : stream?.status === 'COMPLETED' ? 'good' : 'info'} icon="▶" />
+              <StatCard label="Elapsed" value={`${stream?.elapsed ?? 0}s`} tone="info" icon="◷" />
+              <StatCard label="Progress" value={`${Math.round((stream?.progress ?? 0) * 100)}%`} tone={stream?.progress === 1 ? 'good' : 'warn'} icon="▲" spark={stream?.eventsPerSecond?.length ? stream.eventsPerSecond.slice(-10) : undefined} />
+            </div>
+
+            {/* Counters grid */}
+            <div className="live-grid live-grid-counters">
+              <StatCard label="Users" value={(stream?.users ?? live.users).toLocaleString()} tone="info" icon="◉" />
+              <StatCard label="Transactions" value={(stream?.transactions ?? live.transactions).toLocaleString()} tone="violet" icon="⇄" />
+              <StatCard label="API Requests" value={(stream?.apiRequests ?? live.requests).toLocaleString()} tone="info" icon="⌗" />
+              <StatCard label="Network Events" value={(stream?.networkEvents ?? 0).toLocaleString()} tone="good" icon="⬡" />
+              <StatCard label="Security Events" value={(stream?.securityEvents ?? live.events).toLocaleString()} tone="warn" icon="◷" />
+              <StatCard label="Detections" value={(stream?.detections ?? 0).toLocaleString()} tone={stream?.detections ? 'critical' : 'neutral'} icon="◉" />
+              <StatCard label="Risk Decisions" value={(stream?.riskDecisions ?? 0).toLocaleString()} tone="violet" icon="▲" />
+              <StatCard label="Alerts" value={(stream?.alerts ?? 0).toLocaleString()} tone={stream?.alerts ? 'bad' : 'neutral'} icon="⚑" />
+              <StatCard label="Actions" value={(stream?.actions ?? 0).toLocaleString()} tone={stream?.actions ? 'warn' : 'neutral'} icon="🛡" />
+              <StatCard label="Errors" value={stream?.errors?.length ?? live.errors} tone={stream?.errors?.length ? 'bad' : 'good'} icon="✕" />
+              <StatCard label="Events / sec" value={(stream?.eventsPerSec ?? live.eps).toLocaleString()} tone="good" icon="⚡" />
+            </div>
+
+            {/* Charts row */}
+            {stream?.eventsPerSecond?.length ? (
+              <div className="live-charts">
+                <div className="live-chart-card">
+                  <h4 className="live-chart-title">Events / sec</h4>
+                  <LineChart
+                    series={[{ name: 'EPS', values: stream.eventsPerSecond, color: '#22d3ee' }]}
+                    height={160}
+                  />
+                </div>
+                <div className="live-chart-card">
+                  <h4 className="live-chart-title">Risk Distribution</h4>
+                  <LineChart
+                    series={[
+                      { name: 'High', values: stream.eventsPerSecond.map((_, i) => Math.floor(stream.riskDistribution.HIGH * (i + 1) / stream.eventsPerSecond.length)), color: '#f43f5e' },
+                      { name: 'Medium', values: stream.eventsPerSecond.map((_, i) => Math.floor(stream.riskDistribution.MEDIUM * (i + 1) / stream.eventsPerSecond.length)), color: '#fbbf24' },
+                      { name: 'Low', values: stream.eventsPerSecond.map((_, i) => Math.floor(stream.riskDistribution.LOW * (i + 1) / stream.eventsPerSecond.length)), color: '#34d399' },
+                    ]}
+                    height={160}
+                  />
+                  <ChartLegend items={[
+                    { label: 'High', color: '#f43f5e' },
+                    { label: 'Medium', color: '#fbbf24' },
+                    { label: 'Low', color: '#34d399' },
+                  ]} />
+                </div>
+                <div className="live-chart-card">
+                  <h4 className="live-chart-title">Alerts Over Time</h4>
+                  <LineChart
+                    series={[{ name: 'Alerts', values: stream.alertsOverTime, color: '#f43f5e' }]}
+                    height={160}
+                  />
+                </div>
+              </div>
+            ) : null}
+
+            {/* Cancel button */}
+            {streaming ? (
+              <div className="live-actions">
+                <button type="button" className="btn btn-danger" onClick={handleCancel}>
+                  ✕ Cancel Simulation
+                </button>
+              </div>
+            ) : null}
+          </>
         ) : (
           <p className="field-hint">
             No runs yet — launch a simulation above and its live counters will appear here.
           </p>
         )}
+
+        {/* Brute-force drill dashboard: attack volume + pipeline response. */}
+        {live.present && (liveRun?.type === 'BRUTE_FORCE' || liveRun?.scenario === 'BRUTE_FORCE') ? (
+          <div className="bf-dashboard">
+            <h3 className="bf-heading">Brute-Force Drill</h3>
+            <div className="live-grid">
+              <StatCard label="Attack Rate" value={`${live.bf.attackRate}/s`} tone="critical" icon="⚡" />
+              <StatCard label="Failed Logins" value={live.bf.failedLogins.toLocaleString()} tone="bad" icon="✕" />
+              <StatCard label="Target Users" value={live.bf.targetUsers.toLocaleString()} tone="warn" icon="◉" />
+              <StatCard label="Source IPs" value={live.bf.sourceIps.toLocaleString()} tone="info" icon="⬡" />
+              <StatCard
+                label="Risk Decisions"
+                value={live.bf.risk.toLocaleString()}
+                tone="violet"
+                icon="▲"
+              />
+              <StatCard
+                label="Alerts"
+                value={live.bf.alerts.toLocaleString()}
+                tone={live.bf.alerts > 0 ? 'critical' : 'neutral'}
+                icon="⚑"
+              />
+              <StatCard
+                label="Actions"
+                value={live.bf.actions.toLocaleString()}
+                tone={live.bf.actions > 0 ? 'warn' : 'neutral'}
+                icon="🛡"
+                sub={
+                  liveRun.status === 'RUNNING' || liveRun.status === 'QUEUED' ? (
+                    <span>RATE_LIMIT or BLOCK_ACCOUNT auto-applied by risk level</span>
+                  ) : null
+                }
+              />
+            </div>
+          </div>
+        ) : null}
+
+        {/* Account-takeover drill dashboard: full attack-chain visualization. */}
+        {live.present && (liveRun?.type === 'ACCOUNT_TAKEOVER' || liveRun?.scenario === 'ACCOUNT_TAKEOVER') ? (
+          <div className="ato-dashboard">
+            <h3 className="ato-heading">Account-Takeover Drill</h3>
+            <div className="ato-chain">
+              <div className="ato-chain-step">
+                <span className="ato-chain-icon">✕</span>
+                <span className="ato-chain-label">Failed Logins</span>
+                <span className="ato-chain-value">{live.ato.failedLogins.toLocaleString()}</span>
+              </div>
+              <span className="ato-chain-arrow">→</span>
+              <div className="ato-chain-step">
+                <span className="ato-chain-icon">⬡</span>
+                <span className="ato-chain-label">New IP</span>
+                <span className="ato-chain-value">{live.ato.newIpLogins.toLocaleString()}</span>
+              </div>
+              <span className="ato-chain-arrow">→</span>
+              <div className="ato-chain-step">
+                <span className="ato-chain-icon">◉</span>
+                <span className="ato-chain-label">New Device</span>
+                <span className="ato-chain-value">{live.ato.newDeviceLogins.toLocaleString()}</span>
+              </div>
+              <span className="ato-chain-arrow">→</span>
+              <div className="ato-chain-step">
+                <span className="ato-chain-icon">✓</span>
+                <span className="ato-chain-label">Login</span>
+                <span className="ato-chain-value">{live.ato.successfulLogins.toLocaleString()}</span>
+              </div>
+              <span className="ato-chain-arrow">→</span>
+              <div className="ato-chain-step">
+                <span className="ato-chain-icon">⇄</span>
+                <span className="ato-chain-label">Payment</span>
+                <span className="ato-chain-value">{live.ato.suspiciousPayments.toLocaleString()}</span>
+              </div>
+            </div>
+            <div className="live-grid ato-grid">
+              <StatCard label="Target Users" value={live.ato.targetUsers.toLocaleString()} tone="warn" icon="◉" />
+              <StatCard
+                label="Risk Decisions"
+                value={live.ato.risk.toLocaleString()}
+                tone="violet"
+                icon="▲"
+              />
+              <StatCard
+                label="Alerts"
+                value={live.ato.alerts.toLocaleString()}
+                tone={live.ato.alerts > 0 ? 'critical' : 'neutral'}
+                icon="⚑"
+              />
+              <StatCard
+                label="Actions"
+                value={live.ato.actions.toLocaleString()}
+                tone={live.ato.actions > 0 ? 'warn' : 'neutral'}
+                icon="🛡"
+                sub={
+                  liveRun.status === 'RUNNING' || liveRun.status === 'QUEUED' ? (
+                    <span>BLOCK_ACCOUNT + HOLD_TRANSACTION on CRITICAL</span>
+                  ) : null
+                }
+              />
+            </div>
+          </div>
+        ) : null}
+
+        {/* Payment-fraud drill dashboard: transaction analysis + pipeline response. */}
+        {live.present && (liveRun?.type === 'PAYMENT_FRAUD' || liveRun?.scenario === 'PAYMENT_FRAUD') ? (
+          <div className="pf-dashboard">
+            <h3 className="pf-heading">Payment-Fraud Drill</h3>
+            <div className="live-grid pf-grid">
+              <StatCard label="Total Payments" value={live.pf.totalPayments.toLocaleString()} tone="info" icon="⇄" />
+              <StatCard label="High Value" value={live.pf.highValuePayments.toLocaleString()} tone="critical" icon="₹" />
+              <StatCard label="Declined" value={live.pf.declinedPayments.toLocaleString()} tone="bad" icon="✕" />
+              <StatCard label="New Device" value={live.pf.newDevicePayments.toLocaleString()} tone="warn" icon="◉" />
+              <StatCard label="Suspicious IP" value={live.pf.suspiciousIpPayments.toLocaleString()} tone="warn" icon="⬡" />
+              <StatCard label="Fraud Ring Cards" value={live.pf.fraudRingCards.toLocaleString()} tone="violet" icon="⌗" />
+              <StatCard
+                label="Risk Decisions"
+                value={live.pf.risk.toLocaleString()}
+                tone="violet"
+                icon="▲"
+              />
+              <StatCard
+                label="Alerts"
+                value={live.pf.alerts.toLocaleString()}
+                tone={live.pf.alerts > 0 ? 'critical' : 'neutral'}
+                icon="⚑"
+              />
+              <StatCard
+                label="Actions"
+                value={live.pf.actions.toLocaleString()}
+                tone={live.pf.actions > 0 ? 'warn' : 'neutral'}
+                icon="🛡"
+                sub={
+                  liveRun.status === 'RUNNING' || liveRun.status === 'QUEUED' ? (
+                    <span>HOLD_TRANSACTION on CRITICAL — payments held</span>
+                  ) : null
+                }
+              />
+            </div>
+          </div>
+        ) : null}
+
+        {/* Transaction-velocity drill dashboard: rapid payment bursts + pipeline response. */}
+        {live.present && (liveRun?.type === 'TRANSACTION_VELOCITY' || liveRun?.scenario === 'TRANSACTION_VELOCITY') ? (
+          <div className="tv-dashboard">
+            <h3 className="tv-heading">Transaction-Velocity Drill</h3>
+            <div className="live-grid tv-grid">
+              <StatCard label="Transactions / sec" value={live.tv.attackVelocity.toLocaleString()} tone="critical" icon="⇄" />
+              <StatCard label="Baseline" value={live.tv.baselineRate.toLocaleString()} tone="info" icon="◷" />
+              <StatCard label="Attack Velocity" value={live.tv.burstPayments.toLocaleString()} tone="warn" icon="⚡" />
+              <StatCard label="Affected Users" value={live.tv.affectedUsers.toLocaleString()} tone="warn" icon="◉" />
+              <StatCard
+                label="Risk"
+                value={live.tv.risk.toLocaleString()}
+                tone="violet"
+                icon="▲"
+              />
+              <StatCard
+                label="Held Payments"
+                value={live.tv.heldPayments.toLocaleString()}
+                tone={live.tv.heldPayments > 0 ? 'critical' : 'neutral'}
+                icon="⏸"
+                sub={
+                  liveRun.status === 'RUNNING' || liveRun.status === 'QUEUED' ? (
+                    <span>HOLD_TRANSACTION on CRITICAL</span>
+                  ) : null
+                }
+              />
+            </div>
+          </div>
+        ) : null}
+
+        {/* API-abuse drill dashboard: request flood + Redis rate-limit response. */}
+        {live.present && (liveRun?.type === 'API_ABUSE' || liveRun?.scenario === 'API_ABUSE') ? (
+          <div className="api-dashboard">
+            <h3 className="api-heading">API-Abuse Drill</h3>
+            <div className="live-grid api-grid">
+              <StatCard label="Current RPS" value={live.api.currentRps.toLocaleString()} tone="critical" icon="⌗" />
+              <StatCard label="Baseline" value={live.api.baselineRps.toLocaleString()} tone="info" icon="◷" />
+              <StatCard label="Attack RPS" value={live.api.attackRps.toLocaleString()} tone="warn" icon="⚡" />
+              <StatCard label="Blocked Requests" value={live.api.blockedRequests.toLocaleString()} tone="bad" icon="⛔" />
+              <StatCard label="Top IPs" value={live.api.topIps.toLocaleString()} tone="warn" icon="⬡" />
+              <StatCard label="Top Endpoints" value={live.api.topEndpoints.toLocaleString()} tone="warn" icon="⌗" />
+              <StatCard
+                label="Risk"
+                value={live.api.risk.toLocaleString()}
+                tone="violet"
+                icon="▲"
+              />
+              <StatCard
+                label="Alerts"
+                value={live.api.alerts.toLocaleString()}
+                tone={live.api.alerts > 0 ? 'critical' : 'neutral'}
+                icon="⚑"
+                sub={
+                  liveRun.status === 'RUNNING' || liveRun.status === 'QUEUED' ? (
+                    <span>RATE_LIMIT on API_ABUSE_DETECTED</span>
+                  ) : null
+                }
+              />
+            </div>
+            <Card title="Requests / sec (live)">
+              <LineChart
+                series={[
+                  { name: 'Baseline', values: buildRpsSeries(live.api.baselineRps, 24, false), color: '#22d3ee' },
+                  { name: 'Attack', values: buildRpsSeries(live.api.attackRps, 24, true), color: '#f59e0b' },
+                ]}
+                labels={Array.from({ length: 24 }, (_, i) => `${i}s`)}
+              />
+            </Card>
+          </div>
+        ) : null}
+
+        {/* Bot-activity drill dashboard: bot fleet mixed with legitimate traffic. */}
+        {live.present && (liveRun?.type === 'BOT_ACTIVITY' || liveRun?.scenario === 'BOT_ACTIVITY') ? (
+          <div className="bot-dashboard">
+            <h3 className="bot-heading">Bot-Activity Drill</h3>
+            <div className="live-grid bot-grid">
+              <StatCard label="Legitimate %" value={`${live.bot.legitimatePct}%`} tone="good" icon="◉" />
+              <StatCard label="Bot %" value={`${live.bot.botPct}%`} tone="warn" icon="◇" />
+              <StatCard label="Bot IPs" value={live.bot.botIps.toLocaleString()} tone="warn" icon="⬡" />
+              <StatCard label="Endpoints" value={live.bot.endpoints.toLocaleString()} tone="info" icon="⌗" />
+              <StatCard label="Requests" value={live.bot.totalRequests.toLocaleString()} tone="bad" icon="⇄" />
+              <StatCard
+                label="Risk"
+                value={live.bot.risk.toLocaleString()}
+                tone="violet"
+                icon="▲"
+              />
+              <StatCard
+                label="Actions"
+                value={live.bot.actions.toLocaleString()}
+                tone={live.bot.actions > 0 ? 'warn' : 'neutral'}
+                icon="🛡"
+                sub={
+                  liveRun.status === 'RUNNING' || liveRun.status === 'QUEUED' ? (
+                    <span>RATE_LIMIT on BOT_ACTIVITY</span>
+                  ) : null
+                }
+              />
+            </div>
+            <Card title="Traffic Mix (live)">
+              <LineChart
+                series={[
+                  { name: 'Legitimate', values: buildRpsSeries(Math.max(1, live.bot.legits / 10), 24, false), color: '#22d3ee' },
+                  { name: 'Bot', values: buildRpsSeries(Math.max(1, live.bot.bots / 10), 24, true), color: '#f59e0b' },
+                ]}
+                labels={Array.from({ length: 24 }, (_, i) => `${i}s`)}
+              />
+            </Card>
+          </div>
+        ) : null}
+
+        {/* Network drill dashboard: compose-internal synthetic observations. */}
+        {live.present && liveRun != null && NETWORK_SIM_TYPES.includes(String(liveRun.type ?? liveRun.scenario ?? '')) ? (
+          <div className="network-dashboard">
+            <h3 className="network-heading">Network Drill</h3>
+            <div className="live-grid network-grid">
+              <StatCard label="Rate" value={`${live.network.currentRate.toLocaleString()} /s`} tone="critical" icon="⇄" />
+              <StatCard label="Sources" value={live.network.distinctSources.toLocaleString()} tone="info" icon="◉" />
+              <StatCard label="Destinations" value={live.network.distinctDestinations.toLocaleString()} tone="info" icon="⬡" />
+              <StatCard label="Ports" value={live.network.distinctPorts.toLocaleString()} tone="warn" icon="⌗" />
+              <StatCard label="Risk" value={live.network.risk.toLocaleString()} tone="violet" icon="▲" />
+              <StatCard
+                label="Actions"
+                value={live.network.actions.toLocaleString()}
+                tone={live.network.actions > 0 ? 'warn' : 'neutral'}
+                icon="🛡"
+                sub={
+                  liveRun.status === 'RUNNING' || liveRun.status === 'QUEUED' ? (
+                    <span>Synthetic events only — compose-internal targets</span>
+                  ) : null
+                }
+              />
+            </div>
+            <Card title="Top Flows (Source → Destination)">
+              <DataTable<NetworkFlow>
+                columns={[
+                  { key: 'source', header: 'Source', render: (f) => <span className="mono">{f.source}</span> },
+                  { key: 'destination', header: 'Destination', render: (f) => <span className="mono">{f.destination}</span> },
+                  { key: 'port', header: 'Port', render: (f) => <span className="mono">{f.port}</span> },
+                  { key: 'protocol', header: 'Protocol', render: (f) => <span className="muted">{f.protocol}</span> },
+                  { key: 'rate', header: 'Rate', render: (f) => <strong>{`${f.rate.toLocaleString()} /s`}</strong> },
+                  { key: 'risk', header: 'Risk', render: (f) => <span>{f.risk}</span> },
+                  { key: 'severity', header: 'Severity', render: (f) => <StatusBadge status={f.severity} /> },
+                ]}
+                data={live.network.flows}
+                rowKey={(f) => `${f.source}|${f.destination}|${f.port}|${f.protocol}`}
+                itemName="network flows"
+              />
+            </Card>
+          </div>
+        ) : null}
+
+        {/* Mixed-attack campaign dashboard: multi-vector attack visualization. */}
+        {live.present && (liveRun?.type === 'MIXED_ATTACK' || liveRun?.scenario === 'MIXED_ATTACK') ? (
+          <div className="mixed-dashboard">
+            <h3 className="mixed-heading">Mixed-Attack Campaign</h3>
+            <div className="mixed-campaign-flow">
+              <div className="mixed-flow-step mixed-flow-campaign">
+                <span className="mixed-flow-icon">◈</span>
+                <span className="mixed-flow-label">Campaign</span>
+                <span className="mixed-flow-value mono">{live.mixed.campaignId || '—'}</span>
+              </div>
+              <span className="mixed-flow-arrow">→</span>
+              <div className="mixed-flow-step mixed-flow-auth">
+                <span className="mixed-flow-icon">✕</span>
+                <span className="mixed-flow-label">Authentication</span>
+                <span className="mixed-flow-value">{live.mixed.authEvents.toLocaleString()}</span>
+              </div>
+              <span className="mixed-flow-arrow">→</span>
+              <div className="mixed-flow-step mixed-flow-api">
+                <span className="mixed-flow-icon">⌗</span>
+                <span className="mixed-flow-label">API</span>
+                <span className="mixed-flow-value">{live.mixed.apiEvents.toLocaleString()}</span>
+              </div>
+              <span className="mixed-flow-arrow">→</span>
+              <div className="mixed-flow-step mixed-flow-payments">
+                <span className="mixed-flow-icon">⇄</span>
+                <span className="mixed-flow-label">Payments</span>
+                <span className="mixed-flow-value">{live.mixed.paymentEvents.toLocaleString()}</span>
+              </div>
+              <span className="mixed-flow-arrow">→</span>
+              <div className="mixed-flow-step mixed-flow-network">
+                <span className="mixed-flow-icon">⬡</span>
+                <span className="mixed-flow-label">Network</span>
+                <span className="mixed-flow-value">{live.mixed.networkEvents.toLocaleString()}</span>
+              </div>
+              <span className="mixed-flow-arrow">→</span>
+              <div className="mixed-flow-step mixed-flow-detection">
+                <span className="mixed-flow-icon">◉</span>
+                <span className="mixed-flow-label">Detection</span>
+                <span className="mixed-flow-value">{live.mixed.detections.toLocaleString()}</span>
+              </div>
+              <span className="mixed-flow-arrow">→</span>
+              <div className="mixed-flow-step mixed-flow-risk">
+                <span className="mixed-flow-icon">▲</span>
+                <span className="mixed-flow-label">Risk</span>
+                <span className="mixed-flow-value">{live.mixed.risk.toLocaleString()}</span>
+              </div>
+              <span className="mixed-flow-arrow">→</span>
+              <div className="mixed-flow-step mixed-flow-alerts">
+                <span className="mixed-flow-icon">⚑</span>
+                <span className="mixed-flow-label">Alerts</span>
+                <span className="mixed-flow-value">{live.mixed.alerts.toLocaleString()}</span>
+              </div>
+              <span className="mixed-flow-arrow">→</span>
+              <div className="mixed-flow-step mixed-flow-actions">
+                <span className="mixed-flow-icon">🛡</span>
+                <span className="mixed-flow-label">Actions</span>
+                <span className="mixed-flow-value">{live.mixed.actions.toLocaleString()}</span>
+              </div>
+            </div>
+
+            <div className="mixed-vectors">
+              <h4 className="mixed-subheading">Active Attack Vectors</h4>
+              <div className="mixed-vectors-list">
+                {live.mixed.attackVectors.length > 0 ? (
+                  live.mixed.attackVectors.map((v) => (
+                    <span className="mixed-vector-tag" key={v}>
+                      {VECTOR_LABELS[v as SimSection] || v}
+                    </span>
+                  ))
+                ) : (
+                  <span className="muted">No vectors selected</span>
+                )}
+              </div>
+            </div>
+
+            <div className="live-grid mixed-grid">
+              <StatCard
+                label="Total Attack Events"
+                value={live.mixed.totalAttackEvents.toLocaleString()}
+                tone="critical"
+                icon="⚡"
+              />
+              <StatCard
+                label="Data Access Events"
+                value={live.mixed.dataAccessEvents.toLocaleString()}
+                tone="warn"
+                icon="⌗"
+              />
+              <StatCard
+                label="Attack Intensity"
+                value={`${live.mixed.attackIntensity}%`}
+                tone={live.mixed.attackIntensity > 50 ? 'critical' : 'warn'}
+                icon="▲"
+              />
+              <StatCard
+                label="Affected Users"
+                value={live.mixed.affectedUsers.toLocaleString()}
+                tone="warn"
+                icon="◉"
+              />
+              <StatCard
+                label="Detections"
+                value={live.mixed.detections.toLocaleString()}
+                tone={live.mixed.detections > 0 ? 'good' : 'neutral'}
+                icon="◉"
+              />
+              <StatCard
+                label="Risk Decisions"
+                value={live.mixed.risk.toLocaleString()}
+                tone="violet"
+                icon="▲"
+              />
+              <StatCard
+                label="Alerts"
+                value={live.mixed.alerts.toLocaleString()}
+                tone={live.mixed.alerts > 0 ? 'critical' : 'neutral'}
+                icon="⚑"
+              />
+              <StatCard
+                label="Actions"
+                value={live.mixed.actions.toLocaleString()}
+                tone={live.mixed.actions > 0 ? 'warn' : 'neutral'}
+                icon="🛡"
+                sub={
+                  liveRun.status === 'RUNNING' || liveRun.status === 'QUEUED' ? (
+                    <span>Multi-vector response — BLOCK, HOLD, RATE_LIMIT auto-applied</span>
+                  ) : null
+                }
+              />
+            </div>
+          </div>
+        ) : null}
         <p className="field-hint">
           Counters come from the real pipeline. The simulation only injects source events (logins,
           API requests, payments, orders, logouts); alerts are produced downstream, never here.

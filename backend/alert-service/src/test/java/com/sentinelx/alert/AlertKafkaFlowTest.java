@@ -48,7 +48,8 @@ import com.sentinelx.alert.service.ResponseActionExecutor;
         "sentinelx.response.payment-service-url=http://payment.test",
         "sentinelx.response.auth-service-url=http://auth.test",
         "sentinelx.response.rate-limit-ttl=PT15M",
-        "sentinelx.response.verification-ttl=PT24H"})
+        "sentinelx.response.verification-ttl=PT24H",
+        "sentinelx.response.auto-apply-risk-actions=false"})
 @EmbeddedKafka(partitions = 1, topics = {"security.alert", "security.audit", "security.alert.dlt"})
 class AlertKafkaFlowTest {
 

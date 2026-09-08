@@ -39,6 +39,8 @@ public enum SimulationType {
     PORT_SCAN,
     /** Sudden connection-count spikes against one host. */
     CONNECTION_SPIKE,
+    /** High rate of failed/unreachable connection attempts from one source. */
+    FAILED_CONNECTIONS,
     /** Large outbound data transfers to unusual destinations. */
     SUSPICIOUS_OUTBOUND,
     /** Denied access attempts against protected data endpoints. */

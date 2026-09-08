@@ -17,6 +17,7 @@ import com.sentinelx.detection.model.DetectionContext;
 import com.sentinelx.detection.model.DetectionResult;
 import com.sentinelx.detection.model.Severity;
 import com.sentinelx.detection.model.WindowStore;
+import com.sentinelx.detection.rule.api.ApiAbuseDetectedRule;
 import com.sentinelx.detection.rule.api.ApiRequestSpikeRule;
 import com.sentinelx.detection.rule.api.BotActivityRule;
 import com.sentinelx.detection.rule.auth.FailedLoginSpikeRule;
@@ -25,6 +26,7 @@ import com.sentinelx.detection.rule.auth.NewIpRule;
 import com.sentinelx.detection.rule.audit.PrivilegedAccessAnomalyRule;
 import com.sentinelx.detection.rule.audit.UnauthorizedDataAccessRule;
 import com.sentinelx.detection.rule.network.ConnectionSpikeRule;
+import com.sentinelx.detection.rule.network.FailedConnectionsRule;
 import com.sentinelx.detection.rule.network.PortScanRule;
 import com.sentinelx.detection.rule.network.SuspiciousOutboundRule;
 import com.sentinelx.detection.rule.payment.MultipleFailedPaymentsRule;
@@ -61,6 +63,11 @@ class DetectionRulesTest {
             if (ip != null) {
                 windows.record("ip:" + ip, at, data);
             }
+            // Also record into the abuse scope (IP + endpoint) so ApiAbuseDetectedRule can read it.
+            String path = context.text("path", "endpoint", "url");
+            if (ip != null && path != null && !path.isBlank()) {
+                windows.record("abuse:" + ip + ":" + path, at, data);
+            }
             return context;
         } catch (Exception e) {
             throw new IllegalStateException(e);
@@ -75,6 +82,16 @@ class DetectionRulesTest {
         if (data.get("sourceIp") != null) {
             windows.record("ip:" + data.get("sourceIp"), at, d);
         }
+    }
+
+    /** Records a prior event into the abuse scope (IP + endpoint) used by ApiAbuseDetectedRule. */
+    private void priorAbuse(String topic, String ip, String path, Instant at) {
+        Map<String, Object> d = new HashMap<>();
+        d.put("topic", topic);
+        d.put("eventType", "API_REQUEST");
+        d.put("sourceIp", ip);
+        d.put("path", path);
+        windows.record("abuse:" + ip + ":" + path, at, d);
     }
 
     private static void assertComplete(DetectionResult r, String ruleId) {
@@ -229,7 +246,7 @@ class DetectionRulesTest {
     // ---------- TRANSACTION_VELOCITY ----------
 
     @Test
-    @DisplayName("TRANSACTION_VELOCITY fires at 5 payments in 1 minute")
+    @DisplayName("TRANSACTION_VELOCITY fires at 5 payments in 60s — HIGH, recommends HOLD_TRANSACTION")
     void velocityFires() {
         Instant now = Instant.parse("2026-09-03T10:00:00Z");
         for (int i = 0; i < 4; i++) {
@@ -241,7 +258,30 @@ class DetectionRulesTest {
                         "{\"eventType\":\"PAYMENT_CREATED\",\"customerId\":\"vel-cust\",\"amount\":10}", now));
         assertThat(r).isNotNull();
         assertComplete(r, TransactionVelocityRule.RULE_ID);
+        assertThat(r.severity()).isEqualTo(Severity.HIGH);
+        assertThat(r.riskContribution()).isEqualTo(40);
         assertThat(r.reason()).contains("5 payments");
+        assertThat(r.recommendedAction()).contains("HOLD_TRANSACTION");
+    }
+
+    @Test
+    @DisplayName("TRANSACTION_VELOCITY escalates to CRITICAL at 10+ payments")
+    void velocityCriticalEscalation() {
+        Instant now = Instant.parse("2026-09-03T10:00:00Z");
+        for (int i = 0; i < 9; i++) {
+            prior("security.payment", "burst-cust", Map.of(
+                    "eventType", "PAYMENT_CREATED", "customerId", "burst-cust", "amount", 250), now.minusSeconds(i));
+        }
+        DetectionResult r = new TransactionVelocityRule().evaluate(
+                ctx("security.payment", "burst-cust",
+                        "{\"eventType\":\"PAYMENT_CREATED\",\"customerId\":\"burst-cust\",\"amount\":250}", now));
+        assertThat(r).isNotNull();
+        assertComplete(r, TransactionVelocityRule.RULE_ID);
+        assertThat(r.severity()).isEqualTo(Severity.CRITICAL);
+        assertThat(r.riskContribution()).isEqualTo(60);
+        assertThat(r.reason()).contains("10 payments");
+        assertThat(r.reason()).contains("extreme burst velocity");
+        assertThat(r.recommendedAction()).contains("HOLD_TRANSACTION");
     }
 
     @Test
@@ -254,7 +294,7 @@ class DetectionRulesTest {
         }
         assertThat(new TransactionVelocityRule().evaluate(ctx("security.payment", "slow-cust",
                 "{\"eventType\":\"PAYMENT_CREATED\",\"customerId\":\"slow-cust\",\"amount\":10}", now))).isNull();
-        // payments older than 1 minute don't count
+        // payments older than 60 seconds don't count
         for (int i = 1; i <= 4; i++) {
             prior("security.payment", "old-cust", Map.of(
                     "eventType", "PAYMENT_CREATED", "customerId", "old-cust", "amount", 10),
@@ -327,6 +367,116 @@ class DetectionRulesTest {
                 "{\"eventType\":\"API_REQUEST\",\"sourceIp\":\"10.0.0.2\",\"path\":\"/api/x\"}", now))).isNull();
     }
 
+    // ---------- API_ABUSE_DETECTED ----------
+
+    @Test
+    @DisplayName("API_ABUSE_DETECTED fires at 30 requests to one endpoint in 10s — HIGH, RATE_LIMIT")
+    void apiAbuseDetectedFires() {
+        Instant now = Instant.parse("2026-09-03T10:00:00Z");
+        for (int i = 0; i < 29; i++) {
+            priorAbuse("security.api", "198.51.100.1", "/api/payments", now.minusSeconds(i % 10));
+        }
+        DetectionResult r = new ApiAbuseDetectedRule().evaluate(
+                ctx("security.api", "198.51.100.1",
+                        "{\"eventType\":\"API_REQUEST\",\"sourceIp\":\"198.51.100.1\",\"path\":\"/api/payments\"}", now));
+        assertThat(r).isNotNull();
+        assertComplete(r, ApiAbuseDetectedRule.RULE_ID);
+        assertThat(r.severity()).isEqualTo(Severity.HIGH);
+        assertThat(r.riskContribution()).isEqualTo(35);
+        assertThat(r.reason()).contains("30 requests");
+        assertThat(r.recommendedAction()).contains("RATE_LIMIT");
+    }
+
+    @Test
+    @DisplayName("API_ABUSE_DETECTED escalates to CRITICAL at 60+ requests to one endpoint")
+    void apiAbuseDetectedCritical() {
+        Instant now = Instant.parse("2026-09-03T10:00:00Z");
+        for (int i = 0; i < 59; i++) {
+            priorAbuse("security.api", "198.51.100.2", "/api/payments", now.minusSeconds(i % 10));
+        }
+        DetectionResult r = new ApiAbuseDetectedRule().evaluate(
+                ctx("security.api", "198.51.100.2",
+                        "{\"eventType\":\"API_REQUEST\",\"sourceIp\":\"198.51.100.2\",\"path\":\"/api/payments\"}", now));
+        assertThat(r).isNotNull();
+        assertComplete(r, ApiAbuseDetectedRule.RULE_ID);
+        assertThat(r.severity()).isEqualTo(Severity.CRITICAL);
+        assertThat(r.riskContribution()).isEqualTo(55);
+        assertThat(r.reason()).contains("targeted API abuse");
+        assertThat(r.recommendedAction()).contains("RATE_LIMIT");
+    }
+
+    @Test
+    @DisplayName("API_ABUSE_DETECTED stays silent below threshold and across different endpoints")
+    void apiAbuseDetectedNegative() {
+        Instant now = Instant.parse("2026-09-03T10:00:00Z");
+        // 20 requests to same endpoint — below threshold
+        for (int i = 0; i < 20; i++) {
+            priorAbuse("security.api", "10.0.0.10", "/api/payments", now.minusSeconds(i));
+        }
+        assertThat(new ApiAbuseDetectedRule().evaluate(ctx("security.api", "10.0.0.10",
+                "{\"eventType\":\"API_REQUEST\",\"sourceIp\":\"10.0.0.10\",\"path\":\"/api/payments\"}", now))).isNull();
+        // Requests spread across different endpoints don't trigger (scope is per-endpoint)
+        for (int i = 0; i < 40; i++) {
+            priorAbuse("security.api", "10.0.0.11", "/api/endpoint" + i, now.minusSeconds(i % 10));
+        }
+        assertThat(new ApiAbuseDetectedRule().evaluate(ctx("security.api", "10.0.0.11",
+                "{\"eventType\":\"API_REQUEST\",\"sourceIp\":\"10.0.0.11\",\"path\":\"/api/endpoint99\"}", now))).isNull();
+    }
+
+    // ---------- FAILED_CONNECTIONS ----------
+
+    @Test
+    @DisplayName("FAILED_CONNECTIONS fires at 20 failed connections in 60s — MEDIUM")
+    void failedConnectionsFires() {
+        Instant now = Instant.parse("2026-09-03T10:00:00Z");
+        for (int i = 0; i < 19; i++) {
+            prior("security.network", "203.0.113.9", Map.of(
+                    "eventType", "NETWORK_OBSERVATION", "sourceIp", "203.0.113.9",
+                    "destinationIp", "10.0.0.20", "outcome", "DENIED"), now.minusSeconds(i % 55));
+        }
+        DetectionResult r = new FailedConnectionsRule().evaluate(
+                ctx("security.network", "203.0.113.9",
+                        "{\"eventType\":\"NETWORK_OBSERVATION\",\"sourceIp\":\"203.0.113.9\",\"outcome\":\"DENIED\"}", now));
+        assertThat(r).isNotNull();
+        assertComplete(r, FailedConnectionsRule.RULE_ID);
+        assertThat(r.severity()).isEqualTo(Severity.MEDIUM);
+        assertThat(r.riskContribution()).isEqualTo(20);
+        assertThat(r.reason()).contains("20 failed connections");
+    }
+
+    @Test
+    @DisplayName("FAILED_CONNECTIONS escalates to HIGH at 100+ failures")
+    void failedConnectionsEscalatesHigh() {
+        Instant now = Instant.parse("2026-09-03T10:00:00Z");
+        for (int i = 0; i < 110; i++) {
+            prior("security.network", "203.0.113.11", Map.of(
+                    "eventType", "NETWORK_OBSERVATION", "sourceIp", "203.0.113.11",
+                    "destinationIp", "10.0.0.21", "outcome", "DENIED"), now.minusSeconds(i % 55));
+        }
+        DetectionResult r = new FailedConnectionsRule().evaluate(
+                ctx("security.network", "203.0.113.11",
+                        "{\"eventType\":\"NETWORK_OBSERVATION\",\"sourceIp\":\"203.0.113.11\",\"outcome\":\"DENIED\"}", now));
+        assertThat(r).isNotNull();
+        assertComplete(r, FailedConnectionsRule.RULE_ID);
+        assertThat(r.severity()).isEqualTo(Severity.HIGH);
+        assertThat(r.riskContribution()).isEqualTo(35);
+        assertThat(r.recommendedAction()).contains("BLOCK_CONNECTIONS");
+    }
+
+    @Test
+    @DisplayName("FAILED_CONNECTIONS stays silent for successful connections and below threshold")
+    void failedConnectionsNegative() {
+        Instant now = Instant.parse("2026-09-03T10:00:00Z");
+        for (int i = 0; i < 25; i++) {
+            prior("security.network", "203.0.113.12", Map.of(
+                    "eventType", "NETWORK_OBSERVATION", "sourceIp", "203.0.113.12",
+                    "destinationIp", "10.0.0.22", "outcome", "SUCCESS"), now.minusSeconds(i % 55));
+        }
+        assertThat(new FailedConnectionsRule().evaluate(ctx("security.network", "203.0.113.12",
+                "{\"eventType\":\"NETWORK_OBSERVATION\",\"sourceIp\":\"203.0.113.12\",\"outcome\":\"SUCCESS\"}", now)))
+                .isNull();
+    }
+
     // ---------- BOT_ACTIVITY ----------
 
     @Test
@@ -349,6 +499,29 @@ class DetectionRulesTest {
         assertThat(new BotActivityRule().evaluate(ctx("security.api", "10.0.0.5",
                 "{\"eventType\":\"API_REQUEST\",\"sourceIp\":\"10.0.0.5\",\"path\":\"/api/x\","
                         + "\"userAgent\":\"Mozilla/5.0 (Windows NT 10.0) Chrome/126\"}", now))).isNull();
+    }
+
+    @Test
+    @DisplayName("BOT_ACTIVITY escalates to HIGH when a bot floods at 100+ requests")
+    void botActivityEscalatesHigh() {
+        Instant now = Instant.parse("2026-09-03T10:00:00Z");
+        Map<String, Object> d = new HashMap<>();
+        d.put("topic", "security.api");
+        d.put("eventType", "API_REQUEST");
+        d.put("sourceIp", "203.0.113.7");
+        d.put("path", "/api/products");
+        d.put("userAgent", "SimBot/2.0");
+        for (int i = 0; i < 110; i++) {
+            windows.record("ip:" + "203.0.113.7", now.minusSeconds(i % 55), d);
+        }
+        DetectionResult r = new BotActivityRule().evaluate(
+                ctx("security.api", "203.0.113.7",
+                        "{\"eventType\":\"API_REQUEST\",\"sourceIp\":\"203.0.113.7\",\"path\":\"/api/products\",\"userAgent\":\"SimBot/2.0\"}", now));
+        assertThat(r).isNotNull();
+        assertComplete(r, BotActivityRule.RULE_ID);
+        assertThat(r.severity()).isEqualTo(Severity.HIGH);
+        assertThat(r.riskContribution()).isEqualTo(35);
+        assertThat(r.recommendedAction()).contains("RATE_LIMIT");
     }
 
     // ---------- PORT_SCAN ----------

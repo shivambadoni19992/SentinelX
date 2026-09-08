@@ -67,21 +67,62 @@ class SimulationEngineTest {
     }
 
     @Test
-    void bruteForceProducesMostlyFailedLoginsOnFewAccounts() {
+    void bruteForceProducesFailedLoginEventsOnFewTargets() {
         UUID runId = UUID.randomUUID();
         Population population = new Population(50, 20, 10);
+        Map<String, Object> params = Map.of("targetUsers", 4);
         int failures = 0;
-        Set<Object> actors = new HashSet<>();
-        for (int i = 0; i < 500; i++) {
+        int successes = 0;
+        Set<Object> targets = new HashSet<>();
+        for (int i = 0; i < 600; i++) {
             var payload = SimulatedEventFactory.next(runId, i, SimulationType.BRUTE_FORCE,
-                    population, 1.0, 50, Map.of()).payload();
-            if ("FAILURE".equals(payload.get("outcome"))) {
+                    population, 1.0, 50, params).payload();
+            if ("LOGIN_FAILED".equals(payload.get("eventType"))) {
                 failures++;
+            } else if ("LOGIN_SUCCESS".equals(payload.get("eventType"))) {
+                successes++;
             }
-            actors.add(payload.get("actor"));
+            String actor = String.valueOf(payload.get("actor"));
+            assertThat(actor).startsWith("victim"); // all attempts hit target accounts
+            if (actor.startsWith("victim")) {
+                targets.add(actor);
+            }
         }
-        assertThat(failures).isGreaterThan(400); // ~98% failures
-        assertThat(actors.size()).isLessThanOrEqualTo(10); // concentrated on few victims
+        // ~98% are failures, all labelled LOGIN_FAILED for the detection engine.
+        assertThat(failures).isGreaterThan(500);
+        assertThat(successes).isLessThan(50);
+        assertThat(targets.size()).isLessThanOrEqualTo(4); // concentrated on configured targets
+    }
+
+    @Test
+    void bruteForceFailedLoginsRouteToAuthTopic() {
+        UUID runId = UUID.randomUUID();
+        Population population = new Population(50, 20, 10);
+        Map<String, Object> params = Map.of("targetUsers", 2, "authSourceIps", 3);
+        for (int i = 0; i < 200; i++) {
+            var event = SimulatedEventFactory.next(runId, i, SimulationType.BRUTE_FORCE,
+                    population, 1.0, 50, params);
+            assertThat(event.topic()).isEqualTo(SimulatedEventFactory.TOPIC_AUTH);
+            assertThat(event.payload().get("eventType")).isIn("LOGIN_FAILED", "LOGIN_SUCCESS");
+            assertThat(String.valueOf(event.payload().get("sourceIp"))).startsWith("203.0.113.");
+        }
+    }
+
+    @Test
+    void bruteForceTargetCountIsConfigurable() {
+        UUID runId = UUID.randomUUID();
+        Population population = new Population(200, 100, 50);
+        Map<String, Object> params = Map.of("targetUsers", 20);
+        Set<Object> targets = new HashSet<>();
+        for (int i = 0; i < 800; i++) {
+            var actor = SimulatedEventFactory.next(runId, i, SimulationType.BRUTE_FORCE,
+                    population, 1.0, 50, params).payload().get("actor");
+            if (String.valueOf(actor).startsWith("victim")) {
+                targets.add(actor);
+            }
+        }
+        assertThat(targets.size()).isLessThanOrEqualTo(20);
+        assertThat(targets.size()).isGreaterThan(1);
     }
 
     @Test

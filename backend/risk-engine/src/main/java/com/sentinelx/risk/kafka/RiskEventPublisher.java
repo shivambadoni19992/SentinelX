@@ -42,6 +42,10 @@ public class RiskEventPublisher {
             payload.put("subject", subject);
             payload.put("sourceTopic", sourceTopic);
             payload.put("eventId", eventId);
+            // The eventId is the originating correlation id (threaded from the
+            // detection); mirror it as correlationId so downstream traceability /
+            // the simulation tracker can attribute the risk decision to a run.
+            payload.put("correlationId", eventId);
             payload.put("score", scored.score());
             payload.put("level", scored.level().name());
             payload.put("reasons", scored.reasons());

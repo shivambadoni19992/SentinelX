@@ -14,14 +14,19 @@ import org.springframework.stereotype.Component;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.sentinelx.alert.domain.AlertAction;
 import com.sentinelx.alert.entity.SecurityAlert;
 import com.sentinelx.alert.repository.SecurityAlertRepository;
+import com.sentinelx.alert.service.AlertWorkflowService;
 
 /**
  * Consumes {@code RISK_DECIDED} events from {@code security.alert} (published
- * by the risk engine) and opens a {@link SecurityAlert} for each one. Group
- * is {@code sentinelx-alert-service}; poison records are retried then
- * dead-lettered by the shared error handler in {@link AlertKafkaConfig}.
+ * by the risk engine) and opens a {@link SecurityAlert} for each one. The
+ * alert is bound to the acting subject (entityType {@code USER} for auth
+ * events, entityId a stable id derived from the subject) and an automated
+ * response is applied by risk level: RATE_LIMIT for MEDIUM, BLOCK_ACCOUNT for
+ * HIGH/CRITICAL. Auto-apply is gated by
+ * {@code sentinelx.response.auto-apply-risk-actions} (on by default).
  */
 @Component
 public class RiskDecisionConsumer {
@@ -32,9 +37,15 @@ public class RiskDecisionConsumer {
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     private final SecurityAlertRepository alerts;
+    private final AlertWorkflowService workflow;
+    private final boolean autoApply;
 
-    public RiskDecisionConsumer(SecurityAlertRepository alerts) {
+    public RiskDecisionConsumer(SecurityAlertRepository alerts, AlertWorkflowService workflow,
+                                @org.springframework.beans.factory.annotation.Value(
+                                        "${sentinelx.response.auto-apply-risk-actions:true}") boolean autoApply) {
         this.alerts = alerts;
+        this.workflow = workflow;
+        this.autoApply = autoApply;
     }
 
     @KafkaListener(topics = TOPIC, groupId = AlertKafkaConfig.GROUP_ID,
@@ -58,19 +69,58 @@ public class RiskDecisionConsumer {
         if (!"RISK_DECIDED".equals(node.path("eventType").asText(""))) {
             return;
         }
-        SecurityAlert alert = new SecurityAlert();
         String level = node.path("level").asText("LOW");
         String subject = node.path("subject").asText("unknown");
+        SecurityAlert alert = new SecurityAlert();
         alert.setTitle("Risk " + level + " — " + subject);
         alert.setDescription(joinReasons(node));
         alert.setSeverity(level);
-        alert.setEntityType("RISK_SUBJECT");
-        alert.setEntityId(uuid(node.path("eventId").asText(null)));
-        alert.setEventId(uuid(node.path("eventId").asText(null)));
+        // Bind the alert to the acting user: the subject (username) is stored on
+        // assignedTo so RATE_LIMIT keys on it, and entityId is a stable id derived
+        // from the subject so BLOCK_ACCOUNT has a target.
+        alert.setEntityType("USER");
+        alert.setEntityId(uuid(subject));
+        alert.setAssignedTo(subject);
+        alert.setEventId(uuid(node.path("eventId").asText(subject)));
         alert.setStatus("OPEN");
-        alerts.save(alert);
+        SecurityAlert saved = alerts.save(alert);
         log.info("alert opened from risk decision subject={} level={} eventId={}",
                 subject, level, node.path("eventId").asText(""));
+
+        // Automated response policy: MEDIUM → RATE_LIMIT, HIGH → BLOCK_ACCOUNT,
+        // CRITICAL → BLOCK_ACCOUNT + HOLD_TRANSACTION (account takeover: block the
+        // compromised account AND freeze the suspicious payment).
+        if (autoApply && saved.getId() != null) {
+            for (AlertAction action : autoActionsFor(level)) {
+                try {
+                    workflow.applyAction(saved.getId(), action, "auto:risk-" + level);
+                } catch (Exception e) {
+                    log.warn("auto-apply {} failed for alert {} — {}", action, saved.getId(), e.getMessage());
+                }
+            }
+        }
+    }
+
+    /**
+     * Automated response policy. MEDIUM → RATE_LIMIT, HIGH → BLOCK_ACCOUNT,
+     * CRITICAL → BLOCK_ACCOUNT + HOLD_TRANSACTION (account-takeover response).
+     */
+    static java.util.List<AlertAction> autoActionsFor(String level) {
+        return switch (level == null ? "" : level.toUpperCase()) {
+            case "MEDIUM" -> List.of(AlertAction.RATE_LIMIT);
+            case "HIGH" -> List.of(AlertAction.BLOCK_ACCOUNT);
+            case "CRITICAL" -> List.of(AlertAction.BLOCK_ACCOUNT, AlertAction.HOLD_TRANSACTION);
+            default -> List.of();
+        };
+    }
+
+    /** @deprecated use {@link #autoActionsFor(String)} which returns the full action set. */
+    static AlertAction autoActionFor(String level) {
+        return switch (level == null ? "" : level.toUpperCase()) {
+            case "MEDIUM" -> AlertAction.RATE_LIMIT;
+            case "HIGH", "CRITICAL" -> AlertAction.BLOCK_ACCOUNT;
+            default -> null;
+        };
     }
 
     private static String joinReasons(JsonNode node) {
