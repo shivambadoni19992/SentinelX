@@ -33,6 +33,12 @@ export function useCollection<T>(
 ): Collection<T> {
   const { fallback = 'auto', demoLabel } = opts;
 
+  // Fixed hook inventory (every render, unconditional):
+  // 5×useState, 2×useRef, 1×useCallback(run), 1×useEffect, 1×useCallback(refetch).
+  // Previously `run`'s dep array was the caller-supplied `deps`, so adding an
+  // entry changed hook identity between renders; the refreshTick remount key
+  // in App.tsx plus the six useCollection calls in Overview made that fatal.
+  // The deps array is still honored for refetching via depsKey below.
   const [data, setData] = useState<T[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [source, setSource] = useState<Source>('loading');
@@ -44,7 +50,6 @@ export function useCollection<T>(
   fetcherRef.current = fetcher;
   const demoRef = useRef(demoData);
   demoRef.current = demoData;
-
   const run = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -73,13 +78,14 @@ export function useCollection<T>(
       setLoading(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, deps);
+  }, []);
 
   // Refresh when deps change or on mount.
+  const depsKey = JSON.stringify(deps);
   useEffect(() => {
     run().catch(() => undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [run]);
+  }, [run, depsKey]);
 
   const refetch = useCallback(() => run(), [run]);
 

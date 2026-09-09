@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { cancelSimulation, createSimulation, listSimulations, streamSimulation } from '../api/endpoints';
 import type { SimulationProgress } from '../api/types';
 import { useCollection } from '../hooks/useCollection';
@@ -980,7 +980,7 @@ export function SimulationCenter({ user }: { user?: { username: string } }) {
           <>
             {/* Primary metrics grid */}
             <div className="live-grid live-grid-primary">
-              <StatCard label="Simulation ID" value={<span className="mono">{liveRun?.simulationId ?? liveRun?.id ?? '—'}</span>} tone="info" icon="◈" />
+              <StatCard label="Simulation ID" sub={<span className="mono">{liveRun?.simulationId ?? liveRun?.id ?? '—'}</span>} value={(liveRun?.simulationId ?? liveRun?.id ?? '—').slice(0, 8)} tone="info" icon="◈" />
               <StatCard label="Status" value={stream?.status ?? liveRun?.status ?? '—'} tone={stream?.status === 'RUNNING' ? 'warn' : stream?.status === 'COMPLETED' ? 'good' : 'info'} icon="▶" />
               <StatCard label="Elapsed" value={`${stream?.elapsed ?? 0}s`} tone="info" icon="◷" />
               <StatCard label="Progress" value={`${Math.round((stream?.progress ?? 0) * 100)}%`} tone={stream?.progress === 1 ? 'good' : 'warn'} icon="▲" spark={stream?.eventsPerSecond?.length ? stream.eventsPerSecond.slice(-10) : undefined} />

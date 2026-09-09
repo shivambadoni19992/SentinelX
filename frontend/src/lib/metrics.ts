@@ -56,7 +56,7 @@ class MetricsStore {
   }
 
   private initializeMetrics() {
-    const metricDefs: Omit<Metric, 'values'>[] = [
+    const metricDefs: Metric[] = [
       // HTTP metrics
       { name: METRIC_NAMES.HTTP_REQUESTS_TOTAL, help: 'Total HTTP requests', type: 'counter', values: [] },
       { name: METRIC_NAMES.HTTP_REQUEST_DURATION, help: 'HTTP request latency', type: 'histogram', values: [] },
@@ -180,10 +180,12 @@ class MetricsStore {
     return lines.join('\n');
   }
 
-  // Subscribe to metric changes
-  subscribe(listener: () => void) {
+  // Subscribe to metric changes — returns void so it fits useEffect cleanup types.
+  subscribe(listener: () => void): () => void {
     this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
   }
 
   private notifyListeners() {

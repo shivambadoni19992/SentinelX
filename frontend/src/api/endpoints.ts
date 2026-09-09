@@ -99,7 +99,34 @@ export const listSimulations = () => apiFetch<SimulationRun[]>('/api/simulations
 // We still attempt them so the dashboard uses them the moment the route exists.
 export const listSecurityEvents = () => apiFetch<SecurityEvent[]>('/api/security/events');
 export const listAuditLogs = () => apiFetch<AuditLog[]>('/api/security/audit-logs');
-export const listDetections = () => apiFetch<SecurityEvent[]>('/api/detections');
+interface DetectionsEnvelope {
+  count: number;
+  detections: Array<{
+    detectionId: string;
+    ruleId: string;
+    severity: string;
+    reason: string;
+    raisedAt: string;
+    subject?: string;
+    sourceTopic?: string;
+    correlationId?: string;
+  }>;
+}
+/** Detection engine returns {count, detections[]} — normalize to SecurityEvent[]. */
+export const listDetections = () =>
+  apiFetch<DetectionsEnvelope | SecurityEvent[]>('/api/detections').then((res) => {
+    if (Array.isArray(res)) return res;
+    return (res.detections ?? []).map((d) => ({
+      id: d.detectionId,
+      eventType: `DETECTION:${d.ruleId}`,
+      action: d.reason,
+      outcome: 'DETECTED',
+      severity: d.severity,
+      actor: d.subject,
+      sourceIp: undefined,
+      occurredAt: d.raisedAt,
+    })) as SecurityEvent[];
+  });
 
 export interface NewSimulation {
   name: string;

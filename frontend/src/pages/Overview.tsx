@@ -190,7 +190,36 @@ export function Overview({ onNavigate }: { onNavigate: (r: string) => void }) {
     { key: 'status', header: 'Status', render: (a) => <StatusBadge status={a.status} /> },
     { key: 'time', header: 'Triggered', render: (a) => <span className="muted">{relativeTime(a.triggeredAt)}</span> },
   ];
-if (anyLoading) {
+
+  // Hooks below are stable, non-conditional, and run on every render.
+  // IMPORTANT: no hooks may appear after the `if (anyLoading)` early return
+  // below — adding one there is exactly what caused "Rendered more hooks than
+  // during the previous render" (the orders-memo was inserted after the
+  // return, so the hook count grew from 67 to 68 once loading finished).
+  const byOrderStatus = useMemo(() => {
+    const map: Record<string, number> = {};
+    orders.data.forEach((o) => {
+      const k = (o.status || 'UNKNOWN').toUpperCase();
+      map[k] = (map[k] ?? 0) + 1;
+    });
+    return Object.entries(map).map(([label, value], i) => ({
+      label,
+      value,
+      color: [COLORS.blue, COLORS.amber, COLORS.green, COLORS.violet, COLORS.rose, COLORS.cyan][i % 6],
+    }));
+  }, [orders.data]);
+
+  const recentOrders = orders.data.slice(0, 6);
+
+  const orderColumns: Column<Order>[] = [
+    { key: 'order', header: 'Order', render: (o) => <span className="mono">{shortId(o.id)}</span> },
+    { key: 'user', header: 'Customer', render: (o) => <span className="muted">{shortId(o.userId, 10)}</span> },
+    { key: 'total', header: 'Total', render: (o) => <strong>{formatCurrency(o.totalAmount, o.currency)}</strong> },
+    { key: 'status', header: 'Status', render: (o) => <StatusBadge status={o.status} /> },
+    { key: 'time', header: 'Placed', render: (o) => <span className="muted">{relativeTime(o.placedAt)}</span> },
+  ];
+
+  if (anyLoading) {
     return (
       <div className="page-loading">
         <Spinner label="Assembling live SOC overview…" />
@@ -215,28 +244,6 @@ if (anyLoading) {
     { label: 'Network Threats', value: stats.networkThreats, tone: 'bad', icon: '⬡' },
     { label: 'Retail Orders', value: stats.totalOrders, tone: 'info', icon: '▤' },
     { label: 'Open Orders', value: stats.openOrders, tone: 'good', icon: '⇅' },
-  ];
-
-  const byOrderStatus = useMemo(() => {
-    const map: Record<string, number> = {};
-    orders.data.forEach((o) => {
-      const k = (o.status || 'UNKNOWN').toUpperCase();
-      map[k] = (map[k] ?? 0) + 1;
-    });
-    return Object.entries(map).map(([label, value], i) => ({
-      label,
-      value,
-      color: [COLORS.blue, COLORS.amber, COLORS.green, COLORS.violet, COLORS.rose, COLORS.cyan][i % 6],
-    }));
-  }, [orders.data]);
-
-  const recentOrders = orders.data.slice(0, 6);
-  const orderColumns: Column<Order>[] = [
-    { key: 'order', header: 'Order', render: (o) => <span className="mono">{shortId(o.id)}</span> },
-    { key: 'user', header: 'Customer', render: (o) => <span className="muted">{shortId(o.userId, 10)}</span> },
-    { key: 'total', header: 'Total', render: (o) => <strong>{formatCurrency(o.totalAmount, o.currency)}</strong> },
-    { key: 'status', header: 'Status', render: (o) => <StatusBadge status={o.status} /> },
-    { key: 'time', header: 'Placed', render: (o) => <span className="muted">{relativeTime(o.placedAt)}</span> },
   ];
 
   return (

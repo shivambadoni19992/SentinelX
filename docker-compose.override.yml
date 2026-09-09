@@ -1,0 +1,95 @@
+services:
+  postgres:
+    ports: !override
+      - target: 5432
+        published: "5434"
+        protocol: tcp
+        mode: ingress
+  grafana:
+    ports: !override
+      - target: 3000
+        published: "3002"
+        protocol: tcp
+        mode: ingress
+    environment:
+      GF_SERVER_ROOT_URL: http://localhost:3002
+  frontend:
+    ports: !override
+      - target: 5173
+        published: "8090"
+        protocol: tcp
+        mode: ingress
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:5173/ || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+  # --- Fix Spring Boot env binding (no rebuild needed, env-only) ---
+  # Apps read DB_URL/DB_USER/DB_PASSWORD + REDIS_HOST/REDIS_PORT (+gateway
+  # spring.data.redis.*). The base file sets SPRING_DATASOURCE_* / SPRING_REDIS_*
+  # which Spring does NOT map to those placeholders, so containers fell back to
+  # localhost defaults and crashed. We set the correct vars here.
+  api-gateway:
+    environment:
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_DATA_REDIS_PORT: 6379
+      SPRING_DATA_REDIS_PASSWORD: redis_secret
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+  auth-service:
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/sentinelx
+      DB_USER: sentinelx
+      DB_PASSWORD: sentinelx_secret
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      SPRING_FLYWAY_BASELINE_ON_MIGRATE: "true"
+  payment-service:
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/sentinelx
+      DB_USER: sentinelx
+      DB_PASSWORD: sentinelx_secret
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      SPRING_FLYWAY_BASELINE_ON_MIGRATE: "true"
+  retail-service:
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/sentinelx
+      DB_USER: sentinelx
+      DB_PASSWORD: sentinelx_secret
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      SPRING_FLYWAY_BASELINE_ON_MIGRATE: "true"
+  security-event-service:
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/sentinelx
+      DB_USER: sentinelx
+      DB_PASSWORD: sentinelx_secret
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      SPRING_FLYWAY_BASELINE_ON_MIGRATE: "true"
+  detection-engine:
+    environment:
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+  risk-engine:
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/sentinelx
+      DB_USER: sentinelx
+      DB_PASSWORD: sentinelx_secret
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      SPRING_FLYWAY_BASELINE_ON_MIGRATE: "true"
+  alert-service:
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/sentinelx
+      DB_USER: sentinelx
+      DB_PASSWORD: sentinelx_secret
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_DATA_REDIS_PORT: 6379
+      SPRING_DATA_REDIS_PASSWORD: redis_secret
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      SPRING_FLYWAY_BASELINE_ON_MIGRATE: "true"
+  simulation-service:
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/sentinelx
+      DB_USER: sentinelx
+      DB_PASSWORD: sentinelx_secret
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      SPRING_FLYWAY_BASELINE_ON_MIGRATE: "true"

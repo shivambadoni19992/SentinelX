@@ -57,6 +57,21 @@
         </dependencies>
     </dependencyManagement>
 
+    <!--
+        Dependencies inherited by every module.
+        micrometer-registry-prometheus registers the Prometheus registry so the
+        /actuator/prometheus endpoint is exposed to the Prometheus scraper. The
+        management.* config already lists `prometheus` in exposure.include, but
+        without this registry the endpoint returns 404 and Grafana has no data.
+    -->
+    <dependencies>
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-registry-prometheus</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+    </dependencies>
+
     <build>
         <pluginManagement>
             <plugins>

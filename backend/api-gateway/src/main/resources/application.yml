@@ -11,47 +11,12 @@ spring:
     redis:
       host: ${SPRING_DATA_REDIS_HOST:localhost}
       port: ${SPRING_DATA_REDIS_PORT:6379}
+      password: ${SPRING_DATA_REDIS_PASSWORD:}
       timeout: 2s
-
-management:
-  endpoints:
-    web:
-      exposure:
-        include: health,info,metrics,prometheus,gateway
-  endpoint:
-    health:
-      probes:
-        enabled: true
-      show-details: always
-    gateway:
-      enabled: true
-
-info:
-  service: sentinelx-api-gateway
-  env: ${SENTINELX_ENV:local}
-
-# JWT signing/validation. Must match the auth-service secret/issuer so tokens
-# issued at /api/auth/login can be validated at the edge.
-sentinelx:
-  jwt:
-    secret: ${SENTINELX_JWT_SECRET:sentinelx-dev-only-secret-change-me-0123456789abcdef}
-    issuer: ${SENTINELX_JWT_ISSUER:sentinelx-auth-service}
-
-# Per-route rate limiting (token bucket in Redis). Values are overridable via
-# env so tests/e2e can tune them without touching route definitions.
-rate-limit:
-  replenish: ${RATE_LIMIT_REPLENISH:50}
-  burst: ${RATE_LIMIT_BURST:80}
-
-logging:
-  level:
-    root: INFO
-
----
-spring:
-  config:
-    activate:
-      on-profile: default
+  # Route table is intentionally in the SHARED document (no profile guard) so it
+  # loads under every profile (default local runs AND the `docker` profile used
+  # by docker-compose). Previously this lived under `on-profile: default` only,
+  # which left the gateway with zero routes in Docker -> every /api/** 404'd.
   cloud:
     gateway:
       routes:
@@ -91,6 +56,26 @@ spring:
                 redis-rate-limiter.replenishRate: ${rate-limit.replenish}
                 redis-rate-limiter.burstCapacity: ${rate-limit.burst}
                 redis-rate-limiter.requestedTokens: 1
+        - id: security-events
+          uri: http://security-event-service:8084
+          predicates: [ Path=/api/security/events, Path=/api/security/events/** ]
+          filters:
+            - RewritePath=/api/security/(?<segment>.*), /api/$\{segment}
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: ${rate-limit.replenish}
+                redis-rate-limiter.burstCapacity: ${rate-limit.burst}
+                redis-rate-limiter.requestedTokens: 1
+        - id: security-audit
+          uri: http://security-event-service:8084
+          predicates: [ Path=/api/security/audit-logs, Path=/api/security/audit-logs/** ]
+          filters:
+            - RewritePath=/api/security/(?<segment>.*), /api/events/$\{segment}
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: ${rate-limit.replenish}
+                redis-rate-limiter.burstCapacity: ${rate-limit.burst}
+                redis-rate-limiter.requestedTokens: 1
         - id: security
           uri: http://security-event-service:8084
           predicates: [ Path=/api/security/** ]
@@ -124,3 +109,37 @@ spring:
                 redis-rate-limiter.replenishRate: ${rate-limit.replenish}
                 redis-rate-limiter.burstCapacity: ${rate-limit.burst}
                 redis-rate-limiter.requestedTokens: 1
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus,gateway
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: always
+    gateway:
+      enabled: true
+
+info:
+  service: sentinelx-api-gateway
+  env: ${SENTINELX_ENV:local}
+
+# JWT signing/validation. Must match the auth-service secret/issuer so tokens
+# issued at /api/auth/login can be validated at the edge.
+sentinelx:
+  jwt:
+    secret: ${SENTINELX_JWT_SECRET:sentinelx-dev-only-secret-change-me-0123456789abcdef}
+    issuer: ${SENTINELX_JWT_ISSUER:sentinelx-auth-service}
+
+# Per-route rate limiting (token bucket in Redis). Values are overridable via
+# env so tests/e2e can tune them without touching route definitions.
+rate-limit:
+  replenish: ${RATE_LIMIT_REPLENISH:50}
+  burst: ${RATE_LIMIT_BURST:80}
+
+logging:
+  level:
+    root: INFO
