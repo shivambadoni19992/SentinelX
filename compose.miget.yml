@@ -1,0 +1,59 @@
+version: '3.8'
+
+services:
+  # Base Infrastructure & Databases (~16Mi - 20Mi each)
+  opensearch:
+    mem_limit: 20m
+  kafka:
+    mem_limit: 16m
+  zookeeper:
+    mem_limit: 16m
+  postgres:
+    mem_limit: 16m
+  redis:
+    mem_limit: 12m
+
+  # Monitoring (~12Mi each)
+  prometheus:
+    mem_limit: 12m
+  grafana:
+    mem_limit: 12m
+  opensearch-dashboards:
+    mem_limit: 12m
+
+  # Gateway & UI (~16Mi each)
+  api-gateway:
+    mem_limit: 16m
+  frontend:
+    mem_limit: 16m
+
+  # Core Backend Services (~14Mi each)
+  auth-service:
+    mem_limit: 14m
+  payment-service:
+    mem_limit: 14m
+  retail-service:
+    mem_limit: 14m
+  security-event-service:
+    mem_limit: 14m
+  detection-engine:
+    mem_limit: 14m
+  risk-engine:
+    mem_limit: 14m
+  alert-service:
+    mem_limit: 14m
+  simulation-service:
+    mem_limit: 14m
+
+# Persistent Volume Storage Allocation (Sum = 512 MiB)
+volumes:
+  opensearch_data:
+    x-miget-size: 128Mi
+  postgres_data:
+    x-miget-size: 128Mi
+  prometheus_data:
+    x-miget-size: 128Mi
+  grafana_data:
+    x-miget-size: 64Mi
+  redis_data:
+    x-miget-size: 64Mi
