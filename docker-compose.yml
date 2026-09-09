@@ -1,395 +1,543 @@
-name: sentinelx
-
-x-backend-defaults: &backend-defaults
-  build:
-    context: ./backend
-    dockerfile: Dockerfile
-  restart: unless-stopped
-  networks: [sentinelx-net]
-  # Datasource for the services that own tables. api-gateway / detection-engine
-  # have no datasource wiring and simply ignore these. Flyway runs against the
-  # shared `sentinelx` database; each service migrates its own schema.
-  environment:
-    DB_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-sentinelx}
-    DB_USER: ${POSTGRES_USER:-sentinelx}
-    DB_PASSWORD: ${POSTGRES_PASSWORD:-sentinelx}
-  depends_on:
-    postgres:
-      condition: service_healthy
-    redis:
-      condition: service_healthy
-    kafka:
-      condition: service_started
+version: '3.8'
 
 services:
-  # ---------------- Infrastructure ----------------
+  # ============================================================
+  # Infrastructure
+  # ============================================================
+
   postgres:
-    image: ${POSTGRES_IMAGE:-postgres:16-alpine}
+    image: postgres:15-alpine
     container_name: sentinelx-postgres
-    restart: unless-stopped
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-sentinelx}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sentinelx}
-      POSTGRES_DB: ${POSTGRES_DB:-sentinelx}
+      POSTGRES_USER: sentinelx
+      POSTGRES_PASSWORD: sentinelx_secret
+      POSTGRES_DB: sentinelx
+      POSTGRES_INITDB_ARGS: '--encoding=UTF-8'
     ports:
-      - "${POSTGRES_HOST_PORT:-5434}:5432"
+      - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - sentinelx-network
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-sentinelx} -d ${POSTGRES_DB:-sentinelx}"]
-      interval: 5s
+      test: ["CMD-SHELL", "pg_isready -U sentinelx"]
+      interval: 10s
       timeout: 5s
-      retries: 10
-    networks: [sentinelx-net]
+      retries: 5
 
   redis:
-    image: ${REDIS_IMAGE:-redis:7-alpine}
+    image: redis:7-alpine
     container_name: sentinelx-redis
-    restart: unless-stopped
-    command: ["redis-server", "--appendonly", "yes"]
+    command: redis-server --appendonly yes --requirepass redis_secret
     ports:
-      - "${REDIS_HOST_PORT:-6379}:6379"
+      - "6379:6379"
     volumes:
       - redis_data:/data
+    networks:
+      - sentinelx-network
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-    networks: [sentinelx-net]
-
-  kafka:
-    image: ${KAFKA_IMAGE:-apache/kafka:3.7.2}
-    container_name: sentinelx-kafka
-    restart: unless-stopped
-    environment:
-      - KAFKA_NODE_ID=1
-      - KAFKA_PROCESS_ROLES=broker,controller
-      - KAFKA_CONTROLLER_QUORUM_VOTERS=1@kafka:9093
-      - KAFKA_LISTENERS=PLAINTEXT://:9092,CONTROLLER://:9093,PLAINTEXT_HOST://:29092
-      - KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:9092
-      - KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
-      - KAFKA_CONTROLLER_LISTENER_NAMES=CONTROLLER
-      - KAFKA_INTER_BROKER_LISTENER_NAME=PLAINTEXT
-      - KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1
-      - KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=1
-      - KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=1
-      - KAFKA_AUTO_CREATE_TOPICS_ENABLE=true
-      - KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS=0
-    ports:
-      - "${KAFKA_HOST_PORT:-9092}:29092"
-    volumes:
-      - kafka_data:/var/lib/kafka/data
-    healthcheck:
-      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1"]
-      interval: 10s
-      timeout: 10s
-      retries: 15
-    networks: [sentinelx-net]
-
-  kafka-init:
-    image: ${KAFKA_IMAGE:-apache/kafka:3.7.2}
-    container_name: sentinelx-kafka-init
-    depends_on:
-      kafka:
-        condition: service_healthy
-    entrypoint: ["/bin/bash", "-c"]
-    command:
-      - |
-        set -e
-        KAFKA_BIN="/opt/kafka/bin"
-        BOOTSTRAP="kafka:9092"
-        echo "Creating SentinelX security topics..."
-        TOPICS="security.auth security.payment security.api security.retail security.network security.risk security.alert security.audit"
-        for TOPIC in $$TOPICS; do
-          "$$KAFKA_BIN/kafka-topics.sh" --bootstrap-server "$$BOOTSTRAP" --create --if-not-exists \
-            --topic "$$TOPIC" --partitions 3 --replication-factor 1
-          "$$KAFKA_BIN/kafka-topics.sh" --bootstrap-server "$$BOOTSTRAP" --create --if-not-exists \
-            --topic "$$TOPIC.dlt" --partitions 3 --replication-factor 1
-        done
-        "$$KAFKA_BIN/kafka-topics.sh" --bootstrap-server "$$BOOTSTRAP" --list
-    restart: "no"
-    networks: [sentinelx-net]
-
-  opensearch:
-    image: ${OPENSEARCH_IMAGE:-opensearchproject/opensearch:2.17.1}
-    container_name: sentinelx-opensearch
-    restart: unless-stopped
-    environment:
-      - discovery.type=single-node
-      - DISABLE_SECURITY_PLUGIN=true
-      - DISABLE_INSTALL_DEMO_CONFIG=true
-      - bootstrap.memory_lock=false
-      - "OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m"
-      - network.host=0.0.0.0
-    ports:
-      - "${OPENSEARCH_HOST_PORT:-9200}:9200"
-    volumes:
-      - opensearch_data:/usr/share/opensearch/data
-    healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://localhost:9200/_cluster/health >/dev/null 2>&1"]
-      interval: 10s
-      timeout: 10s
-      retries: 30
-    networks: [sentinelx-net]
-
-  prometheus:
-    image: ${PROMETHEUS_IMAGE:-prom/prometheus:v2.53.0}
-    container_name: sentinelx-prometheus
-    restart: unless-stopped
-    command:
-      - --config.file=/etc/prometheus/prometheus.yml
-    volumes:
-      - ./infrastructure/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-    ports:
-      - "${PROMETHEUS_HOST_PORT:-9090}:9090"
-    healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:9090/-/healthy || curl -fsS http://localhost:9090/-/healthy || exit 1"]
+      test: ["CMD", "redis-cli", "-a", "redis_secret", "ping"]
       interval: 10s
       timeout: 5s
-      retries: 12
-    networks: [sentinelx-net]
+      retries: 5
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.4.0
+    container_name: sentinelx-zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+    networks:
+      - sentinelx-network
+    healthcheck:
+      test: ["CMD-SHELL", "echo ruok | nc localhost 2181"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  kafka:
+    image: confluentinc/cp-kafka:7.4.0
+    container_name: sentinelx-kafka
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,PLAINTEXT_HOST://0.0.0.0:29092
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_LOG_RETENTION_HOURS: 24
+    networks:
+      - sentinelx-network
+    healthcheck:
+      test: ["CMD", "kafka-topics", "--bootstrap-server", "localhost:9092", "--list"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+
+  opensearch:
+    image: opensearchproject/opensearch:2.9.0
+    container_name: sentinelx-opensearch
+    environment:
+      discovery.type: single-node
+      OPENSEARCH_JAVA_OPTS: -Xms512m -Xmx512m
+      OPENSEARCH_INITIAL_ADMIN_PASSWORD: OpenSearch@123
+      DISABLE_SECURITY_PLUGIN: "true"
+    ports:
+      - "9200:9200"
+      - "9600:9600"
+    volumes:
+      - opensearch_data:/usr/share/opensearch/data
+    networks:
+      - sentinelx-network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+
+  opensearch-dashboards:
+    image: opensearchproject/opensearch-dashboards:2.9.0
+    container_name: sentinelx-opensearch-dashboards
+    depends_on:
+      opensearch:
+        condition: service_healthy
+    environment:
+      OPENSEARCH_HOSTS: '["http://opensearch:9200"]'
+      DISABLE_SECURITY_DASHBOARDS_PLUGIN: "true"
+    ports:
+      - "5601:5601"
+    networks:
+      - sentinelx-network
+
+  prometheus:
+    image: prom/prometheus:v2.47.0
+    container_name: sentinelx-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./infrastructure/prometheus:/etc/prometheus
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=7d'
+      - '--web.enable-lifecycle'
+    networks:
+      - sentinelx-network
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:9090/-/healthy || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   grafana:
-    image: ${GRAFANA_IMAGE:-grafana/grafana:11.2.0}
+    image: grafana/grafana:10.1.2
     container_name: sentinelx-grafana
-    restart: unless-stopped
-    environment:
-      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
-      GF_AUTH_ANONYMOUS_ENABLED: "true"
+    depends_on:
+      prometheus:
+        condition: service_healthy
     ports:
-      - "${GRAFANA_HOST_PORT:-3000}:3000"
+      - "3001:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_SERVER_ROOT_URL: http://localhost:3001
     volumes:
       - ./infrastructure/grafana/provisioning:/etc/grafana/provisioning
       - ./infrastructure/grafana/dashboards:/var/lib/grafana/dashboards
       - grafana_data:/var/lib/grafana
-    depends_on:
-      prometheus:
-        condition: service_started
+    networks:
+      - sentinelx-network
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:3000/api/health || curl -fsS http://localhost:3000/api/health || exit 1"]
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:3000/api/health || exit 1"]
       interval: 10s
       timeout: 5s
-      retries: 12
-# ---------------- Backend services ----------------
+      retries: 5
+
+  # ============================================================
+  # Applications (Java Backend)
+  # ============================================================
+
   api-gateway:
-    <<: *backend-defaults
-    image: sentinelx/api-gateway
     build:
       context: ./backend
       dockerfile: Dockerfile
-      args: { SERVICE: api-gateway }
+      args:
+        SERVICE: api-gateway
+    container_name: sentinelx-api-gateway
+    ports:
+      - "8080:8080"
     environment:
-      SERVER_PORT: "8080"
-      SENTINELX_ENV: ${SENTINELX_ENV:-local}
-      SPRING_DATA_REDIS_HOST: redis
-      SPRING_DATA_REDIS_PORT: "6379"
-      SENTINELX_JWT_SECRET: ${SENTINELX_JWT_SECRET:-sentinelx-dev-only-secret-change-me-0123456789abcdef}
-      SENTINELX_JWT_ISSUER: ${SENTINELX_JWT_ISSUER:-sentinelx-auth-service}
-    ports: ["${API_GATEWAY_PORT:-8080}:8080"]
-    healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:8080/actuator/health || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 20
-
-  auth-service:
-    <<: *backend-defaults
-    image: sentinelx/auth-service
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-      args: { SERVICE: auth-service }
-    environment:
-      SERVER_PORT: "8081"
-      SENTINELX_ENV: ${SENTINELX_ENV:-local}
-      DB_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-sentinelx}
-      DB_USER: ${POSTGRES_USER:-sentinelx}
-      DB_PASSWORD: ${POSTGRES_PASSWORD:-sentinelx}
+      SPRING_PROFILES_ACTIVE: docker
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/sentinelx
+      SPRING_DATASOURCE_USERNAME: sentinelx
+      SPRING_DATASOURCE_PASSWORD: sentinelx_secret
+      SPRING_REDIS_HOST: redis
+      SPRING_REDIS_PORT: 6379
+      SPRING_REDIS_PASSWORD: redis_secret
       SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
-    ports: ["${AUTH_SERVICE_PORT:-8081}:8081"]
-    healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:8081/actuator/health || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 20
-
-  payment-service:
-    <<: *backend-defaults
-    image: sentinelx/payment-service
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-      args: { SERVICE: payment-service }
-    environment:
-      SERVER_PORT: "8082"
-      SENTINELX_ENV: ${SENTINELX_ENV:-local}
-      DB_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-sentinelx}
-      DB_USER: ${POSTGRES_USER:-sentinelx}
-      DB_PASSWORD: ${POSTGRES_PASSWORD:-sentinelx}
-      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
-      PAYMENT_EVENT_TOPIC: ${PAYMENT_EVENT_TOPIC:-security.payment}
+      OPENSEARCH_URIS: http://opensearch:9200
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
       kafka:
-        condition: service_started
-    ports: ["${PAYMENT_SERVICE_PORT:-8082}:8082"]
+        condition: service_healthy
+      opensearch:
+        condition: service_healthy
+    networks:
+      - sentinelx-network
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:8082/actuator/health || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 20
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8080/actuator/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  auth-service:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      args:
+        SERVICE: auth-service
+    container_name: sentinelx-auth-service
+    ports:
+      - "8081:8081"
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      SERVER_PORT: 8081
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/sentinelx
+      SPRING_DATASOURCE_USERNAME: sentinelx
+      SPRING_DATASOURCE_PASSWORD: sentinelx_secret
+      SPRING_REDIS_HOST: redis
+      SPRING_REDIS_PORT: 6379
+      SPRING_REDIS_PASSWORD: redis_secret
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    networks:
+      - sentinelx-network
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8081/actuator/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  payment-service:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      args:
+        SERVICE: payment-service
+    container_name: sentinelx-payment-service
+    ports:
+      - "8082:8082"
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      SERVER_PORT: 8082
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/sentinelx
+      SPRING_DATASOURCE_USERNAME: sentinelx
+      SPRING_DATASOURCE_PASSWORD: sentinelx_secret
+      SPRING_REDIS_HOST: redis
+      SPRING_REDIS_PORT: 6379
+      SPRING_REDIS_PASSWORD: redis_secret
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      OPENSEARCH_URIS: http://opensearch:9200
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      opensearch:
+        condition: service_healthy
+    networks:
+      - sentinelx-network
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8082/actuator/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
 
   retail-service:
-    <<: *backend-defaults
-    image: sentinelx/retail-service
     build:
       context: ./backend
       dockerfile: Dockerfile
-      args: { SERVICE: retail-service }
+      args:
+        SERVICE: retail-service
+    container_name: sentinelx-retail-service
+    ports:
+      - "8083:8083"
     environment:
-      SERVER_PORT: "8083"
-      SENTINELX_ENV: ${SENTINELX_ENV:-local}
-      DB_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-sentinelx}
-      DB_USER: ${POSTGRES_USER:-sentinelx}
-      DB_PASSWORD: ${POSTGRES_PASSWORD:-sentinelx}
+      SPRING_PROFILES_ACTIVE: docker
+      SERVER_PORT: 8083
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/sentinelx
+      SPRING_DATASOURCE_USERNAME: sentinelx
+      SPRING_DATASOURCE_PASSWORD: sentinelx_secret
+      SPRING_REDIS_HOST: redis
+      SPRING_REDIS_PORT: 6379
+      SPRING_REDIS_PASSWORD: redis_secret
       SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
-      RETAIL_EVENT_TOPIC: ${RETAIL_EVENT_TOPIC:-security.retail}
-    ports: ["${RETAIL_SERVICE_PORT:-8083}:8083"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    networks:
+      - sentinelx-network
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:8083/actuator/health || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 20
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8083/actuator/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
 
   security-event-service:
-    <<: *backend-defaults
-    image: sentinelx/security-event-service
     build:
       context: ./backend
       dockerfile: Dockerfile
-      args: { SERVICE: security-event-service }
+      args:
+        SERVICE: security-event-service
+    container_name: sentinelx-security-event-service
+    ports:
+      - "8084:8084"
     environment:
-      SERVER_PORT: "8084"
-      SENTINELX_ENV: ${SENTINELX_ENV:-local}
-      DB_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-sentinelx}
-      DB_USER: ${POSTGRES_USER:-sentinelx}
-      DB_PASSWORD: ${POSTGRES_PASSWORD:-sentinelx}
+      SPRING_PROFILES_ACTIVE: docker
+      SERVER_PORT: 8084
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/sentinelx
+      SPRING_DATASOURCE_USERNAME: sentinelx
+      SPRING_DATASOURCE_PASSWORD: sentinelx_secret
+      SPRING_REDIS_HOST: redis
+      SPRING_REDIS_PORT: 6379
+      SPRING_REDIS_PASSWORD: redis_secret
       SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
-    ports: ["${SECURITY_EVENT_SERVICE_PORT:-8084}:8084"]
+      OPENSEARCH_URIS: http://opensearch:9200
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      opensearch:
+        condition: service_healthy
+    networks:
+      - sentinelx-network
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:8084/actuator/health || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 20
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8084/actuator/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
 
   detection-engine:
-    <<: *backend-defaults
-    image: sentinelx/detection-engine
     build:
       context: ./backend
       dockerfile: Dockerfile
-      args: { SERVICE: detection-engine }
+      args:
+        SERVICE: detection-engine
+    container_name: sentinelx-detection-engine
+    ports:
+      - "8085:8085"
     environment:
-      SERVER_PORT: "8085"
-      SENTINELX_ENV: ${SENTINELX_ENV:-local}
-    ports: ["${DETECTION_ENGINE_PORT:-8085}:8085"]
+      SPRING_PROFILES_ACTIVE: docker
+      SERVER_PORT: 8085
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/sentinelx
+      SPRING_DATASOURCE_USERNAME: sentinelx
+      SPRING_DATASOURCE_PASSWORD: sentinelx_secret
+      SPRING_REDIS_HOST: redis
+      SPRING_REDIS_PORT: 6379
+      SPRING_REDIS_PASSWORD: redis_secret
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      SPRING_KAFKA_CONSUMER_GROUP: detection-engine
+      OPENSEARCH_URIS: http://opensearch:9200
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      opensearch:
+        condition: service_healthy
+    networks:
+      - sentinelx-network
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:8085/actuator/health || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 20
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8085/actuator/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
 
   risk-engine:
-    <<: *backend-defaults
-    image: sentinelx/risk-engine
     build:
       context: ./backend
       dockerfile: Dockerfile
-      args: { SERVICE: risk-engine }
+      args:
+        SERVICE: risk-engine
+    container_name: sentinelx-risk-engine
+    ports:
+      - "8086:8086"
     environment:
-      SERVER_PORT: "8086"
-      SENTINELX_ENV: ${SENTINELX_ENV:-local}
-      DB_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-sentinelx}
-      DB_USER: ${POSTGRES_USER:-sentinelx}
-      DB_PASSWORD: ${POSTGRES_PASSWORD:-sentinelx}
-    ports: ["${RISK_ENGINE_PORT:-8086}:8086"]
+      SPRING_PROFILES_ACTIVE: docker
+      SERVER_PORT: 8086
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/sentinelx
+      SPRING_DATASOURCE_USERNAME: sentinelx
+      SPRING_DATASOURCE_PASSWORD: sentinelx_secret
+      SPRING_REDIS_HOST: redis
+      SPRING_REDIS_PORT: 6379
+      SPRING_REDIS_PASSWORD: redis_secret
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      SPRING_KAFKA_CONSUMER_GROUP: risk-engine
+      OPENSEARCH_URIS: http://opensearch:9200
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      opensearch:
+        condition: service_healthy
+    networks:
+      - sentinelx-network
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:8086/actuator/health || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 20
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8086/actuator/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
 
   alert-service:
-    <<: *backend-defaults
-    image: sentinelx/alert-service
     build:
       context: ./backend
       dockerfile: Dockerfile
-      args: { SERVICE: alert-service }
+      args:
+        SERVICE: alert-service
+    container_name: sentinelx-alert-service
+    ports:
+      - "8087:8087"
     environment:
-      SERVER_PORT: "8087"
-      SENTINELX_ENV: ${SENTINELX_ENV:-local}
-      DB_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-sentinelx}
-      DB_USER: ${POSTGRES_USER:-sentinelx}
-      DB_PASSWORD: ${POSTGRES_PASSWORD:-sentinelx}
-    ports: ["${ALERT_SERVICE_PORT:-8087}:8087"]
+      SPRING_PROFILES_ACTIVE: docker
+      SERVER_PORT: 8087
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/sentinelx
+      SPRING_DATASOURCE_USERNAME: sentinelx
+      SPRING_DATASOURCE_PASSWORD: sentinelx_secret
+      SPRING_REDIS_HOST: redis
+      SPRING_REDIS_PORT: 6379
+      SPRING_REDIS_PASSWORD: redis_secret
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      SPRING_KAFKA_CONSUMER_GROUP: alert-service
+      OPENSEARCH_URIS: http://opensearch:9200
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      opensearch:
+        condition: service_healthy
+    networks:
+      - sentinelx-network
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:8087/actuator/health || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 20
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8087/actuator/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
 
   simulation-service:
-    <<: *backend-defaults
-    image: sentinelx/simulation-service
     build:
       context: ./backend
       dockerfile: Dockerfile
-      args: { SERVICE: simulation-service }
+      args:
+        SERVICE: simulation-service
+    container_name: sentinelx-simulation-service
+    ports:
+      - "8088:8088"
     environment:
-      SERVER_PORT: "8088"
-      SENTINELX_ENV: ${SENTINELX_ENV:-local}
-      DB_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-sentinelx}
-      DB_USER: ${POSTGRES_USER:-sentinelx}
-      DB_PASSWORD: ${POSTGRES_PASSWORD:-sentinelx}
-    ports: ["${SIMULATION_SERVICE_PORT:-8088}:8088"]
+      SPRING_PROFILES_ACTIVE: docker
+      SERVER_PORT: 8088
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/sentinelx
+      SPRING_DATASOURCE_USERNAME: sentinelx
+      SPRING_DATASOURCE_PASSWORD: sentinelx_secret
+      SPRING_REDIS_HOST: redis
+      SPRING_REDIS_PORT: 6379
+      SPRING_REDIS_PASSWORD: redis_secret
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      OPENSEARCH_URIS: http://opensearch:9200
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      opensearch:
+        condition: service_healthy
+    networks:
+      - sentinelx-network
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:8088/actuator/health || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 20
-# ---------------- Frontend ----------------
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8088/actuator/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-    image: sentinelx/frontend
     container_name: sentinelx-frontend
-    restart: unless-stopped
-    environment:
-      # Inside the compose network the browser hits the frontend dev server
-      # (:8090) which server-side proxies /api to the gateway. The proxy target
-      # must resolve to the gateway container, not the frontend's own localhost.
-      - VITE_API_BASE=${API_GATEWAY_INTERNAL_BASE:-http://api-gateway:8080}
-      - VITE_SSE_BASE=${API_GATEWAY_WS_BASE:-http://api-gateway:8080}
     ports:
-      - "${FRONTEND_HOST_PORT:-8090}:5173"
+      - "3000:80"
+    environment:
+      API_GATEWAY_URL: http://localhost:8080
     depends_on:
       api-gateway:
-        condition: service_started
-    networks: [sentinelx-net]
+        condition: service_healthy
+    networks:
+      - sentinelx-network
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:80/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
+# ============================================================
+# Networks
+# ============================================================
+networks:
+  sentinelx-network:
+    driver: bridge
+    name: sentinelx-network
+
+# ============================================================
+# Volumes
+# ============================================================
 volumes:
   postgres_data:
+    name: sentinelx-postgres-data
   redis_data:
-  kafka_data:
+    name: sentinelx-redis-data
   opensearch_data:
+    name: sentinelx-opensearch-data
+  prometheus_data:
+    name: sentinelx-prometheus-data
   grafana_data:
-
-networks:
-  sentinelx-net:
-    name: sentinelx-net
-    driver: bridge
+    name: sentinelx-grafana-data

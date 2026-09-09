@@ -18,6 +18,7 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import com.sentinelx.simulation.domain.SimulationStatus;
 import com.sentinelx.simulation.dto.SimulationProgressDto;
+import com.sentinelx.simulation.dto.SimulationRunDto;
 
 /**
  * Broadcasts live simulation progress to registered SSE emitters. One emitter is

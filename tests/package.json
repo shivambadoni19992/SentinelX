@@ -1,0 +1,17 @@
+{
+  "name": "sentinelx-tests",
+  "version": "1.0.0",
+  "description": "End-to-end tests for SentinelX platform",
+  "main": "run-tests.ts",
+  "scripts": {
+    "test": "ts-node run-tests.ts",
+    "test:security": "ts-node -e 'import { SecurityTests } from \"./security/security-tests\"; import { TestResults } from \"./e2e/test-config\"; const r = new TestResults(); const t = new SecurityTests(r); t.testJWT().then(() => t.testRBAC()).then(() => t.testDataMasking()).then(() => t.testAuditLogging()).then(() => r.print())'",
+    "test:simulation": "ts-node -e 'import { SimulationTests } from \"./simulation/simulation-tests\"; import { TestResults } from \"./e2e/test-config\"; const r = new TestResults(); const t = new SimulationTests(r); t.authenticate().then(() => t.testSimulationCancellation()).then(() => r.print())'",
+    "test:attacks": "ts-node -e 'import { AttackTests } from \"./e2e/attack-tests\"; import { TestResults } from \"./e2e/test-config\"; const r = new TestResults(); const t = new AttackTests(r); t.authenticate().then(() => t.testBruteForce()).then(() => t.testAccountTakeover()).then(() => r.print())'",
+    "test:kafka": "ts-node -e 'import { KafkaTests } from \"./integration/kafka-tests\"; import { TestResults } from \"./e2e/test-config\"; const r = new TestResults(); const t = new KafkaTests(r); t.testKafkaProduce().then(() => t.testKafkaConsume()).then(() => r.print())'"
+  },
+  "dependencies": {
+    "ts-node": "^10.9.1",
+    "typescript": "^5.2.0"
+  }
+}

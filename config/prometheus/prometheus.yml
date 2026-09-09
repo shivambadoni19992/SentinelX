@@ -1,0 +1,110 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  scrape_timeout: 10s
+
+# Alertmanager configuration (optional)
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: []
+
+# Load rules once and periodically evaluate them
+rule_files:
+  # - "first_rules.yml"
+  # - "second_rules.yml"
+
+# Scrape configurations
+scrape_configs:
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+        labels:
+          service: 'prometheus'
+
+  # Gateway service
+  - job_name: 'gateway'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['gateway:8080']
+        labels:
+          service: 'gateway'
+
+  # Auth service
+  - job_name: 'auth'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['auth:8081']
+        labels:
+          service: 'auth'
+
+  # Payment service
+  - job_name: 'payment'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['payment:8082']
+        labels:
+          service: 'payment'
+
+  # Retail service
+  - job_name: 'retail'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['retail:8083']
+        labels:
+          service: 'retail'
+
+  # Security Event service
+  - job_name: 'security-event'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['security-event:8084']
+        labels:
+          service: 'security-event'
+
+  # Detection service
+  - job_name: 'detection'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['detection:8085']
+        labels:
+          service: 'detection'
+
+  # Risk service
+  - job_name: 'risk'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['risk:8086']
+        labels:
+          service: 'risk'
+
+  # Alert service
+  - job_name: 'alert'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['alert:8087']
+        labels:
+          service: 'alert'
+
+  # Simulation service
+  - job_name: 'simulation'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['simulation:8088']
+        labels:
+          service: 'simulation'
+
+  # PostgreSQL exporter (optional - would need separate exporter)
+  - job_name: 'postgres'
+    static_configs:
+      - targets: ['postgres:5432']
+        labels:
+          service: 'postgres'
+
+  # Redis exporter (optional - would need separate exporter)
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['redis:6379']
+        labels:
+          service: 'redis'
